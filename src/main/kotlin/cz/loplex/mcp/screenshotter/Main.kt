@@ -67,6 +67,18 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                             "y" to mapOf("type" to "integer")
                         )
                     )
+                ),
+                ToolInfo(
+                    name = "resize_window",
+                    description = "Resizes the active application window to the given width and height.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "required" to listOf("width", "height"),
+                        "properties" to mapOf(
+                            "width" to mapOf("type" to "integer"),
+                            "height" to mapOf("type" to "integer")
+                        )
+                    )
                 )
             ))
         }
@@ -91,6 +103,14 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                     ToolResult(content = listOf(mapOf(
                         "type" to "text",
                         "text" to "Mouse $action executed at ($x, $y)."
+                    )))
+                } else if (name == "resize_window") {
+                    val width = arguments?.get("width")?.asInt() ?: 1024
+                    val height = arguments?.get("height")?.asInt() ?: 768
+                    server.resizeTopLevelWindows(width, height)
+                    ToolResult(content = listOf(mapOf(
+                        "type" to "text",
+                        "text" to "Window resized to ${width}x${height}."
                     )))
                 } else {
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Unknown tool: $name")))

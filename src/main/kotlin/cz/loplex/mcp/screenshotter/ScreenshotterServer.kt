@@ -100,6 +100,55 @@ class ScreenshotterServer {
         }
     }
 
-    // Note: For advanced window resizing of arbitrary X11 windows, 
-    // JNA (Java Native Access) with X11 Xlib is required.
+    interface X11Ext : com.sun.jna.platform.unix.X11 {
+        companion object {
+            val INSTANCE: X11Ext = com.sun.jna.Native.load("X11", X11Ext::class.java)
+        }
+
+        fun XResizeWindow(display: com.sun.jna.platform.unix.X11.Display?, w: com.sun.jna.platform.unix.X11.Window?, width: Int, height: Int): Int
+    }
+
+    /**
+     * Resizes all viewable top-level windows (direct children of the root window)
+     * using JNA and native X11 calls.
+     */
+    fun resizeTopLevelWindows(width: Int, height: Int) {
+        val x11 = X11Ext.INSTANCE
+        val display = x11.XOpenDisplay(null) ?: throw RuntimeException("Failed to open X11 display for resizing")
+        
+        try {
+            val root = x11.XDefaultRootWindow(display)
+            
+            val rootRef = com.sun.jna.platform.unix.X11.WindowByReference()
+            val parentRef = com.sun.jna.platform.unix.X11.WindowByReference()
+            val childrenRef = com.sun.jna.ptr.PointerByReference()
+            val childrenCountRef = com.sun.jna.ptr.IntByReference()
+            
+            val status = x11.XQueryTree(display, root, rootRef, parentRef, childrenRef, childrenCountRef)
+            if (status != 0 && childrenCountRef.value > 0) {
+                val childrenPtr = childrenRef.value
+                val childCount = childrenCountRef.value
+                
+                for (i in 0 until childCount) {
+                    val winId = if (com.sun.jna.Native.LONG_SIZE == 8) {
+                        childrenPtr.getLong(i * 8L)
+                    } else {
+                        childrenPtr.getInt(i * 4L).toLong()
+                    }
+                    val win = com.sun.jna.platform.unix.X11.Window(winId)
+                    
+                    val attributes = com.sun.jna.platform.unix.X11.XWindowAttributes()
+                    x11.XGetWindowAttributes(display, win, attributes)
+                    
+                    // IsViewable = 2
+                    if (attributes.map_state == com.sun.jna.platform.unix.X11.IsViewable) {
+                        x11.XResizeWindow(display, win, width, height)
+                    }
+                }
+                x11.XFree(childrenPtr)
+            }
+        } finally {
+            x11.XCloseDisplay(display)
+        }
+    }
 }
