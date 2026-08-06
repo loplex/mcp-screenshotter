@@ -79,6 +79,14 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                             "height" to mapOf("type" to "integer")
                         )
                     )
+                ),
+                ToolInfo(
+                    name = "get_ui_tree",
+                    description = "Gets the AT-SPI accessibility tree of the current desktop (buttons, labels, bounds, etc).",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to emptyMap<String, Any>()
+                    )
                 )
             ))
         }
@@ -111,6 +119,13 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                     ToolResult(content = listOf(mapOf(
                         "type" to "text",
                         "text" to "Window resized to ${width}x${height}."
+                    )))
+                } else if (name == "get_ui_tree") {
+                    val reader = AtSpiReader()
+                    val tree = reader.getUiTree()
+                    ToolResult(content = listOf(mapOf(
+                        "type" to "text",
+                        "text" to jacksonObjectMapper().writeValueAsString(tree)
                     )))
                 } else {
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Unknown tool: $name")))

@@ -13,15 +13,16 @@ import javax.imageio.ImageIO
  * Core logic for taking screenshots, computing deltas, and sending native events
  * via java.awt.Robot (which uses native X11 libraries on Linux).
  */
-class ScreenshotterServer {
+class ScreenshotterServer(
+    private val x11: X11Ext = X11Ext.INSTANCE
+) {
 
     private var lastScreenshot: BufferedImage? = null
-    private val robot: Robot
-
-    init {
+    
+    // Lazy initialization so tests without X11 DISPLAY won't crash during class instantiation
+    private val robot: Robot by lazy {
         try {
-            // Robot uses native OS bindings (X11 XTEST extension on Linux)
-            robot = Robot()
+            Robot()
         } catch (e: AWTException) {
             throw RuntimeException("Failed to initialize AWT Robot for native interaction. Ensure DISPLAY is set.", e)
         }
@@ -113,7 +114,6 @@ class ScreenshotterServer {
      * using JNA and native X11 calls.
      */
     fun resizeTopLevelWindows(width: Int, height: Int) {
-        val x11 = X11Ext.INSTANCE
         val display = x11.XOpenDisplay(null) ?: throw RuntimeException("Failed to open X11 display for resizing")
         
         try {
