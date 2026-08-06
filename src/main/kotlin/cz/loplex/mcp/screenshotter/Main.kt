@@ -106,6 +106,20 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                         ),
                         "required" to listOf("text")
                     )
+                ),
+                ToolInfo(
+                    name = "highlight_area",
+                    description = "Takes a screenshot with a red highlight box drawn over the specified area.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "required" to listOf("x", "y", "width", "height"),
+                        "properties" to mapOf(
+                            "x" to mapOf("type" to "integer"),
+                            "y" to mapOf("type" to "integer"),
+                            "width" to mapOf("type" to "integer"),
+                            "height" to mapOf("type" to "integer")
+                        )
+                    )
                 )
             ))
         }
@@ -155,6 +169,19 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                     val clip = ClipboardManager()
                     clip.setText(text)
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Clipboard updated.")))
+                } else if (name == "highlight_area") {
+                    val x = arguments?.get("x")?.asInt() ?: 0
+                    val y = arguments?.get("y")?.asInt() ?: 0
+                    val width = arguments?.get("width")?.asInt() ?: 100
+                    val height = arguments?.get("height")?.asInt() ?: 100
+                    
+                    val img = server.takeScreenshotWithHighlight(x, y, width, height)
+                    val b64 = server.imageToBase64(img)
+                    ToolResult(content = listOf(mapOf(
+                        "type" to "image",
+                        "mimeType" to "image/png",
+                        "data" to b64
+                    )))
                 } else {
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Unknown tool: $name")))
                 }

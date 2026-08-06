@@ -33,8 +33,36 @@ class ScreenshotterServer(
      */
     fun takeFullScreenshot(): BufferedImage {
         val screenSize = Toolkit.getDefaultToolkit().screenSize
-        val screenRect = Rectangle(screenSize)
-        return robot.createScreenCapture(screenRect)
+        val rect = Rectangle(screenSize)
+        val image = robot.createScreenCapture(rect)
+        lastScreenshot = image
+        return image
+    }
+
+    /**
+     * Takes a screenshot and draws a semi-transparent highlight box over the specified coordinates.
+     * Useful for visual documentation of what the agent is clicking/interacting with.
+     */
+    fun takeScreenshotWithHighlight(x: Int, y: Int, width: Int, height: Int): BufferedImage {
+        val image = takeFullScreenshot()
+        
+        // Use Graphics2D to draw the highlight
+        val g2d = image.createGraphics()
+        try {
+            // Draw a semi-transparent red fill
+            g2d.color = java.awt.Color(255, 0, 0, 64) // 25% opacity red
+            g2d.fillRect(x, y, width, height)
+            
+            // Draw a solid red border
+            g2d.color = java.awt.Color.RED
+            g2d.stroke = java.awt.BasicStroke(3f) // 3px border
+            g2d.drawRect(x, y, width, height)
+        } finally {
+            g2d.dispose()
+        }
+        
+        lastScreenshot = image
+        return image
     }
 
     /**

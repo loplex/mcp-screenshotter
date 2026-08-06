@@ -8,9 +8,10 @@ This document serves to track ideas and future improvements for the MCP server t
 - **Expected Behavior:** The server connects to the window running inside Xephyr and returns a structured JSON containing UI element types (panel, button, text), their names, and precise `bounding box` coordinates (x, y, width, height). This allows the agent to know exactly where to "drag" if it wants to resize a panel.
 *(Implemented via JNA in AtSpiReader)*
 
-## 2. Highlighting UI Elements for Documentation
+## 2. ~~Highlighting UI Elements for Documentation~~ **[DONE]**
 - **Concept:** When the agent clicks or interacts with an element (e.g., opening a specific menu), the server should inject (or draw via image processing) visual indicators into the final screenshot.
 - **Usage:** Drawing a semi-transparent red border around a button for final documentation purposes, right before or as the screenshot is saved.
+*(Implemented via `highlight_area` MCP tool and AWT Graphics2D)*
 
 ## 3. Computer Vision (OpenCV) Fallback for Non-Standard Apps
 - **Problem:** Not all applications support AT-SPI (e.g., old Java UIs without access bridges, custom game engines, apps running via Wine without a bridge).
