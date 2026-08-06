@@ -53,13 +53,18 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
             mapOf("tools" to listOf(
                 ToolInfo(
                     name = "get_screenshot",
-                    description = "Takes a full screenshot of the current environment. Can optionally compare against the last screenshot and return text instead of an image if the screen hasn't changed beyond the threshold.",
+                    description = "Takes a screenshot of the current environment. Can optionally crop, compute changes since last screenshot, or return text if unchanged.",
                     inputSchema = mapOf(
                         "type" to "object",
                         "properties" to mapOf(
+                            "x" to mapOf("type" to "integer", "description" to "Optional X coordinate for crop area."),
+                            "y" to mapOf("type" to "integer", "description" to "Optional Y coordinate for crop area."),
+                            "width" to mapOf("type" to "integer", "description" to "Optional width for crop area."),
+                            "height" to mapOf("type" to "integer", "description" to "Optional height for crop area."),
+                            "include_deltas" to mapOf("type" to "boolean", "description" to "If true, returns a list of bounding boxes where pixels changed compared to the last screenshot."),
                             "threshold" to mapOf(
                                 "type" to "number",
-                                "description" to "Percentage of pixels that must change to return a new image (0.0 to 100.0). E.g. 0.5 means 0.5%."
+                                "description" to "Percentage of pixels that must change to return a new image (0.0 to 100.0)."
                             )
                         )
                     )
@@ -147,23 +152,57 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
             try {
                 if (name == "get_screenshot") {
                     val threshold = arguments?.get("threshold")?.asDouble() ?: -1.0
-                    val img = server.takeFullScreenshot()
+                    val includeDeltas = arguments?.get("include_deltas")?.asBoolean() ?: false
                     
-                    if (threshold >= 0.0 && !server.hasScreenChanged(img, threshold)) {
+                    val x = arguments?.get("x")?.asInt()
+                    val y = arguments?.get("y")?.asInt()
+                    val width = arguments?.get("width")?.asInt()
+                    val height = arguments?.get("height")?.asInt()
+                    
+                    val cropRect = if (x != null && y != null && width != null && height != null) {
+                        java.awt.Rectangle(x, y, width, height)
+                    } else null
+                    
+                    // We must capture full screen first to do proper deltas and save it
+                    // The server's takeScreenshot will handle the cropping for the final image.
+                    val fullImg = server.takeScreenshot(null)
+                    val oldImg = server.getLastScreenshot()
+                    
+                    val changedBoxes = if (includeDeltas) {
+                        server.getChangedBoundingBoxes(fullImg, oldImg).map { 
+                            mapOf("x" to it.x, "y" to it.y, "width" to it.width, "height" to it.height) 
+                        }
+                    } else emptyList()
+
+                    val hasChanged = server.hasScreenChanged(fullImg, threshold)
+                    server.updateLastScreenshot(fullImg)
+
+                    if (threshold >= 0.0 && !hasChanged) {
                         ToolResult(content = listOf(mapOf(
                             "type" to "text",
                             "text" to jacksonObjectMapper().writeValueAsString(mapOf(
                                 "changed" to false,
-                                "message" to "The screen has not changed beyond the $threshold% threshold since the last capture."
+                                "message" to "The screen has not changed beyond the $threshold% threshold since the last capture.",
+                                "changed_areas" to changedBoxes
                             ))
                         )))
                     } else {
-                        val b64 = server.imageToBase64(img)
-                        ToolResult(content = listOf(mapOf(
-                            "type" to "image",
-                            "mimeType" to "image/png",
-                            "data" to b64
-                        )))
+                        val finalImg = if (cropRect != null) server.takeScreenshot(cropRect) else fullImg
+                        val b64 = server.imageToBase64(finalImg)
+                        val content = mutableListOf<Map<String, Any>>(
+                            mapOf(
+                                "type" to "image",
+                                "mimeType" to "image/png",
+                                "data" to b64
+                            )
+                        )
+                        if (includeDeltas) {
+                            content.add(mapOf(
+                                "type" to "text",
+                                "text" to jacksonObjectMapper().writeValueAsString(mapOf("changed_areas" to changedBoxes))
+                            ))
+                        }
+                        ToolResult(content = content)
                     }
                 } else if (name == "mouse_action") {
                     val action = arguments?.get("action")?.asText() ?: "move"
@@ -213,7 +252,7 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                     )))
                 } else if (name == "detect_ui_elements") {
                     val vision = VisionFallback()
-                    val img = server.takeFullScreenshot()
+                    val img = server.takeScreenshot()
                     val elements = vision.detectElements(img)
                     ToolResult(content = listOf(mapOf(
                         "type" to "text",

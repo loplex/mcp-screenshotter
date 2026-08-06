@@ -18,9 +18,10 @@ This document serves to track ideas and future improvements for the MCP server t
 - **Solution:** Add an image analysis tool using OpenCV (edge detection, Hough transform). By analyzing pixels, the server could identify straight lines acting as "panel splitters" and return their coordinates as an alternative to AT-SPI.
 *(Implemented via `detect_ui_elements` MCP tool and OpenCV Canny edge detection)*
 
-## 4. Differential Images (Deltas) - Advanced Memory Management
+## 4. ~~Differential Images (Deltas) - Advanced Memory Management~~ **[DONE]**
 - **Current State:** Initial comparison and cropping of changes are implemented.
 - **Improvement:** Better compression and handling of minor visual changes (e.g., blinking cursors, ticking clocks) so these don't constantly trigger new large screen updates. Implementation of "thresholding" (ignoring changes below X percent/pixels).
+*(Implemented via the `threshold` parameter in `get_screenshot` which returns a textual JSON response if the visual difference is below the percentage)*
 
 ## 5. ~~Clipboard Integration in Xephyr~~ **[DONE]**
 - **Feature:** Tools for syncing, reading, or writing clipboard content directly to/from the isolated X11 server (Xephyr), allowing the agent to perform efficient `Copy` and `Paste` actions instead of typing long text character by character.

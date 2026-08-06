@@ -29,21 +29,101 @@ class ScreenshotterServer(
     }
 
     /**
-     * Takes a full screenshot of the default screen.
+     * Takes a screenshot of the default screen.
+     * Optionally crops the image to the specified rectangle before returning,
+     * but always stores the FULL screen in memory for accurate future delta comparisons.
      */
-    fun takeFullScreenshot(): BufferedImage {
+    fun takeScreenshot(cropRect: Rectangle? = null): BufferedImage {
         val screenSize = Toolkit.getDefaultToolkit().screenSize
-        val rect = Rectangle(screenSize)
-        val image = robot.createScreenCapture(rect)
-        // Note: we don't update lastScreenshot here, it's updated in hasScreenChanged 
-        // to ensure we only update it when the tool actually consumes it.
-        return image
+        val fullRect = Rectangle(screenSize)
+        val fullImage = robot.createScreenCapture(fullRect)
+        
+        return if (cropRect != null) {
+            // Ensure crop is within bounds
+            val safeX = maxOf(0, cropRect.x)
+            val safeY = maxOf(0, cropRect.y)
+            val safeW = minOf(fullImage.width - safeX, cropRect.width)
+            val safeH = minOf(fullImage.height - safeY, cropRect.height)
+            fullImage.getSubimage(safeX, safeY, safeW, safeH)
+        } else {
+            fullImage
+        }
+    }
+
+    /**
+     * Finds bounding boxes of areas that changed between two images.
+     * Uses a fast 16x16 grid-based clustering algorithm.
+     */
+    fun getChangedBoundingBoxes(newImg: BufferedImage, oldImg: BufferedImage?): List<Rectangle> {
+        if (oldImg == null || oldImg.width != newImg.width || oldImg.height != newImg.height) {
+            return emptyList() // Can't compare or everything changed
+        }
+
+        val cellSize = 16
+        val cols = (newImg.width + cellSize - 1) / cellSize
+        val rows = (newImg.height + cellSize - 1) / cellSize
+        val grid = Array(rows) { BooleanArray(cols) }
+
+        // 1. Mark changed cells
+        for (y in 0 until newImg.height step 2) {
+            for (x in 0 until newImg.width step 2) {
+                if (newImg.getRGB(x, y) != oldImg.getRGB(x, y)) {
+                    grid[y / cellSize][x / cellSize] = true
+                }
+            }
+        }
+
+        // 2. Group adjacent changed cells into bounding boxes using simple DFS
+        val visited = Array(rows) { BooleanArray(cols) }
+        val boxes = mutableListOf<Rectangle>()
+
+        fun dfs(r: Int, c: Int, box: IntArray) {
+            if (r < 0 || c < 0 || r >= rows || c >= cols || visited[r][c] || !grid[r][c]) return
+            visited[r][c] = true
+            box[0] = minOf(box[0], c) // minCol
+            box[1] = minOf(box[1], r) // minRow
+            box[2] = maxOf(box[2], c) // maxCol
+            box[3] = maxOf(box[3], r) // maxRow
+            dfs(r - 1, c, box)
+            dfs(r + 1, c, box)
+            dfs(r, c - 1, box)
+            dfs(r, c + 1, box)
+        }
+
+        for (r in 0 until rows) {
+            for (c in 0 until cols) {
+                if (grid[r][c] && !visited[r][c]) {
+                    val box = intArrayOf(c, r, c, r)
+                    dfs(r, c, box)
+                    
+                    val x = box[0] * cellSize
+                    val y = box[1] * cellSize
+                    val w = minOf((box[2] - box[0] + 1) * cellSize, newImg.width - x)
+                    val h = minOf((box[3] - box[1] + 1) * cellSize, newImg.height - y)
+                    boxes.add(Rectangle(x, y, w, h))
+                }
+            }
+        }
+
+        return boxes
+    }
+
+    /**
+     * Updates the lastScreenshot state. Call this AFTER all delta computations are done.
+     */
+    fun updateLastScreenshot(img: BufferedImage) {
+        lastScreenshot = img
+    }
+
+    /**
+     * Gets the previous screenshot
+     */
+    fun getLastScreenshot(): BufferedImage? {
+        return lastScreenshot
     }
 
     /**
      * Compares a new screenshot to the last stored screenshot.
-     * If the percentage of differing pixels is <= threshold, returns false.
-     * Otherwise, updates lastScreenshot to newImg and returns true.
      */
     fun hasScreenChanged(newImg: BufferedImage, threshold: Double): Boolean {
         val last = lastScreenshot
@@ -69,7 +149,6 @@ class ScreenshotterServer(
             return false
         }
 
-        lastScreenshot = newImg
         return true
     }
 
@@ -78,7 +157,7 @@ class ScreenshotterServer(
      * Useful for visual documentation of what the agent is clicking/interacting with.
      */
     fun takeScreenshotWithHighlight(x: Int, y: Int, width: Int, height: Int): BufferedImage {
-        val image = takeFullScreenshot()
+        val image = takeScreenshot(null)
         
         // Use Graphics2D to draw the highlight
         val g2d = image.createGraphics()
@@ -95,7 +174,7 @@ class ScreenshotterServer(
             g2d.dispose()
         }
         
-        lastScreenshot = image
+        updateLastScreenshot(image)
         return image
     }
 

@@ -11,52 +11,56 @@ import kotlin.test.assertNull
 class ScreenshotterServerTest {
 
     @Test
-    fun `test getImageDelta with no changes returns null`() {
-        val server = ScreenshotterServer()
-        val img1 = createTestImage(100, 100, Color.WHITE)
-        val img2 = createTestImage(100, 100, Color.WHITE)
-
-        val (cropped, bbox) = server.getImageDelta(img1, img2)
-
-        assertNull(cropped, "Cropped image should be null when there are no changes")
-        assertNull(bbox, "Bounding box should be null when there are no changes")
-    }
-
-    @Test
-    fun `test getImageDelta with changes returns correct bounding box`() {
+    fun `test hasScreenChanged with threshold`() {
         val server = ScreenshotterServer()
         val img1 = createTestImage(100, 100, Color.WHITE)
         val img2 = createTestImage(100, 100, Color.WHITE)
         
-        // Draw a black 10x10 square at (50, 50)
-        val graphics = img2.createGraphics()
-        graphics.color = Color.BLACK
-        graphics.fillRect(50, 50, 10, 10)
-        graphics.dispose()
-
-        val (cropped, bbox) = server.getImageDelta(img1, img2)
-
-        assertNotNull(cropped, "Cropped image should not be null")
-        assertNotNull(bbox, "Bounding box should not be null")
+        server.updateLastScreenshot(img1)
         
-        assertEquals(Rectangle(50, 50, 10, 10), bbox)
-        assertEquals(10, cropped.width)
-        assertEquals(10, cropped.height)
+        // 0% change
+        assertEquals(false, server.hasScreenChanged(img2, 0.0))
+        
+        // Change exactly 1 pixel out of 10,000 (0.01%)
+        img2.setRGB(50, 50, Color.BLACK.rgb)
+        assertEquals(false, server.hasScreenChanged(img2, 0.05), "Should not trigger if under threshold")
+        assertEquals(true, server.hasScreenChanged(img2, 0.005), "Should trigger if over threshold")
     }
-    
+
     @Test
-    fun `test getImageDelta with different dimensions returns new image`() {
+    fun `test getChangedBoundingBoxes`() {
         val server = ScreenshotterServer()
         val img1 = createTestImage(100, 100, Color.WHITE)
-        val img2 = createTestImage(200, 200, Color.BLACK)
-
-        val (cropped, bbox) = server.getImageDelta(img1, img2)
-
-        assertNotNull(cropped)
-        assertNotNull(bbox)
+        val img2 = createTestImage(100, 100, Color.WHITE)
         
-        assertEquals(Rectangle(0, 0, 200, 200), bbox)
-        assertEquals(200, cropped.width)
+        // Draw a small 10x10 square at (20, 20)
+        val g1 = img2.createGraphics()
+        g1.color = Color.BLACK
+        g1.fillRect(20, 20, 10, 10)
+        
+        // Draw another 5x5 square at (80, 80)
+        g1.color = Color.RED
+        g1.fillRect(80, 80, 5, 5)
+        g1.dispose()
+
+        val boxes = server.getChangedBoundingBoxes(img2, img1)
+        
+        assertEquals(2, boxes.size, "Should detect exactly 2 distinct changed regions")
+        
+        // Due to the 16x16 grid, the boxes will be snapped to the grid boundaries
+        // Square at 20,20 (size 10) spans from x=20 to 29. 
+        // Grid cell 1 (x=16..31), Grid cell 2 (x=16..31) -> width 16
+        val box1 = boxes.find { it.x == 16 && it.y == 16 }
+        assertNotNull(box1, "Box 1 should snap to grid at x=16, y=16")
+        assertEquals(16, box1.width)
+        assertEquals(16, box1.height)
+
+        // Square at 80,80 (size 5) spans from x=80 to 84.
+        // Grid cell (x=80..95, y=80..95)
+        val box2 = boxes.find { it.x == 80 && it.y == 80 }
+        assertNotNull(box2, "Box 2 should snap to grid at x=80, y=80")
+        assertEquals(16, box2.width)
+        assertEquals(16, box2.height)
     }
 
     private fun createTestImage(width: Int, height: Int, color: Color): BufferedImage {
