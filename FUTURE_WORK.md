@@ -29,3 +29,7 @@ This document serves to track ideas and future improvements for the MCP server t
 ## 6. ~~Native Window Management (Resizing)~~ **[DONE]**
 - **Feature:** Natively resize windows in X11 using JNA without relying on external processes like `xdotool` or a heavy Window Manager.
 *(Implemented via JNA `XResizeWindow`)*
+
+## 7. Isolated App Launcher (Self-Managed Environment)
+- **Feature:** Allow the MCP server to directly spawn target applications within a controlled, isolated environment (e.g., automatically starting Xephyr and its own `dbus-run-session` for AT-SPI2).
+- **Usage:** Instead of the user or testing script setting up the X11 display, the LLM agent could call a `launch_app` tool (e.g., `launch_app("java SampleApp")`), and the server would fully containerize the GUI session.
