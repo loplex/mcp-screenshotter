@@ -13,9 +13,10 @@ This document serves to track ideas and future improvements for the MCP server t
 - **Usage:** Drawing a semi-transparent red border around a button for final documentation purposes, right before or as the screenshot is saved.
 *(Implemented via `highlight_area` MCP tool and AWT Graphics2D)*
 
-## 3. Computer Vision (OpenCV) Fallback for Non-Standard Apps
+## 3. ~~Computer Vision (OpenCV) Fallback for Non-Standard Apps~~ **[DONE]**
 - **Problem:** Not all applications support AT-SPI (e.g., old Java UIs without access bridges, custom game engines, apps running via Wine without a bridge).
 - **Solution:** Add an image analysis tool using OpenCV (edge detection, Hough transform). By analyzing pixels, the server could identify straight lines acting as "panel splitters" and return their coordinates as an alternative to AT-SPI.
+*(Implemented via `detect_ui_elements` MCP tool and OpenCV Canny edge detection)*
 
 ## 4. Differential Images (Deltas) - Advanced Memory Management
 - **Current State:** Initial comparison and cropping of changes are implemented.

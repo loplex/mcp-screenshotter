@@ -120,6 +120,14 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                             "height" to mapOf("type" to "integer")
                         )
                     )
+                ),
+                ToolInfo(
+                    name = "detect_ui_elements",
+                    description = "Uses OpenCV to visually detect bounds of UI elements (buttons, inputs) in the current screen. Fallback for when get_ui_tree doesn't work.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to emptyMap<String, Any>()
+                    )
                 )
             ))
         }
@@ -181,6 +189,14 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                         "type" to "image",
                         "mimeType" to "image/png",
                         "data" to b64
+                    )))
+                } else if (name == "detect_ui_elements") {
+                    val vision = VisionFallback()
+                    val img = server.takeFullScreenshot()
+                    val elements = vision.detectElements(img)
+                    ToolResult(content = listOf(mapOf(
+                        "type" to "text",
+                        "text" to jacksonObjectMapper().writeValueAsString(mapOf("detected_elements" to elements))
                     )))
                 } else {
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Unknown tool: $name")))

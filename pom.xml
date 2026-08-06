@@ -67,6 +67,13 @@
             <artifactId>jackson-module-kotlin</artifactId>
         </dependency>
 
+        <!-- OpenCV for Computer Vision Fallback (Edge Detection) -->
+        <dependency>
+            <groupId>org.openpnp</groupId>
+            <artifactId>opencv</artifactId>
+            <version>4.7.0-0</version>
+        </dependency>
+
 
         <!-- Testing -->
         <dependency>
