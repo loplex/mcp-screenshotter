@@ -66,6 +66,8 @@ class AtSpiReader(
             val desktop = atspi.atspi_get_desktop(i)
             System.err.println("[AtSpiReader] Desktop $i: pointer=$desktop")
             if (desktop != null) {
+                val childCount = atspi.atspi_accessible_get_child_count(desktop, null)
+                System.err.println("[AtSpiReader] Desktop $i child count: $childCount")
                 desktops.add(parseAccessible(desktop, 0, 10)) // Max depth 10
             }
         }

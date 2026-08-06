@@ -53,8 +53,16 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
             mapOf("tools" to listOf(
                 ToolInfo(
                     name = "get_screenshot",
-                    description = "Takes a full screenshot of the current environment.",
-                    inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+                    description = "Takes a full screenshot of the current environment. Can optionally compare against the last screenshot and return text instead of an image if the screen hasn't changed beyond the threshold.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to mapOf(
+                            "threshold" to mapOf(
+                                "type" to "number",
+                                "description" to "Percentage of pixels that must change to return a new image (0.0 to 100.0). E.g. 0.5 means 0.5%."
+                            )
+                        )
+                    )
                 ),
                 ToolInfo(
                     name = "mouse_action",
@@ -138,13 +146,25 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
             
             try {
                 if (name == "get_screenshot") {
+                    val threshold = arguments?.get("threshold")?.asDouble() ?: -1.0
                     val img = server.takeFullScreenshot()
-                    val b64 = server.imageToBase64(img)
-                    ToolResult(content = listOf(mapOf(
-                        "type" to "image",
-                        "mimeType" to "image/png",
-                        "data" to b64
-                    )))
+                    
+                    if (threshold >= 0.0 && !server.hasScreenChanged(img, threshold)) {
+                        ToolResult(content = listOf(mapOf(
+                            "type" to "text",
+                            "text" to jacksonObjectMapper().writeValueAsString(mapOf(
+                                "changed" to false,
+                                "message" to "The screen has not changed beyond the $threshold% threshold since the last capture."
+                            ))
+                        )))
+                    } else {
+                        val b64 = server.imageToBase64(img)
+                        ToolResult(content = listOf(mapOf(
+                            "type" to "image",
+                            "mimeType" to "image/png",
+                            "data" to b64
+                        )))
+                    }
                 } else if (name == "mouse_action") {
                     val action = arguments?.get("action")?.asText() ?: "move"
                     val x = arguments?.get("x")?.asInt() ?: 0

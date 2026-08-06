@@ -35,8 +35,42 @@ class ScreenshotterServer(
         val screenSize = Toolkit.getDefaultToolkit().screenSize
         val rect = Rectangle(screenSize)
         val image = robot.createScreenCapture(rect)
-        lastScreenshot = image
+        // Note: we don't update lastScreenshot here, it's updated in hasScreenChanged 
+        // to ensure we only update it when the tool actually consumes it.
         return image
+    }
+
+    /**
+     * Compares a new screenshot to the last stored screenshot.
+     * If the percentage of differing pixels is <= threshold, returns false.
+     * Otherwise, updates lastScreenshot to newImg and returns true.
+     */
+    fun hasScreenChanged(newImg: BufferedImage, threshold: Double): Boolean {
+        val last = lastScreenshot
+        if (last == null || last.width != newImg.width || last.height != newImg.height) {
+            lastScreenshot = newImg
+            return true
+        }
+
+        var diffPixels = 0
+        val totalPixels = newImg.width * newImg.height
+
+        for (y in 0 until newImg.height) {
+            for (x in 0 until newImg.width) {
+                if (newImg.getRGB(x, y) != last.getRGB(x, y)) {
+                    diffPixels++
+                }
+            }
+        }
+
+        val diffPercentage = (diffPixels.toDouble() / totalPixels) * 100.0
+
+        if (diffPercentage <= threshold) {
+            return false
+        }
+
+        lastScreenshot = newImg
+        return true
     }
 
     /**
