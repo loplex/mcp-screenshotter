@@ -50,7 +50,8 @@ class AtSpiReader(
 
     fun init() {
         if (!initialized) {
-            atspi.atspi_init()
+            val res = atspi.atspi_init()
+            System.err.println("[AtSpiReader] atspi_init() returned: $res")
             initialized = true
         }
     }
@@ -58,9 +59,12 @@ class AtSpiReader(
     fun getUiTree(): Map<String, Any> {
         init()
         val desktopCount = atspi.atspi_get_desktop_count()
+        System.err.println("[AtSpiReader] atspi_get_desktop_count() returned: $desktopCount")
+        
         val desktops = mutableListOf<Map<String, Any>>()
         for (i in 0 until desktopCount) {
             val desktop = atspi.atspi_get_desktop(i)
+            System.err.println("[AtSpiReader] Desktop $i: pointer=$desktop")
             if (desktop != null) {
                 desktops.add(parseAccessible(desktop, 0, 10)) // Max depth 10
             }
