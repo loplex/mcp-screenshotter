@@ -30,8 +30,9 @@ fun main() {
                 val response = JsonRpcResponse(id = request.id, result = responseResult)
                 println(mapper.writeValueAsString(response))
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             System.err.println("Error processing message: ${e.message}")
+            e.printStackTrace(System.err)
         }
     }
 }
@@ -201,8 +202,8 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                 } else {
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Unknown tool: $name")))
                 }
-            } catch (e: Exception) {
-                ToolResult(content = listOf(mapOf("type" to "text", "text" to (e.message ?: "Error"))), isError = true)
+            } catch (e: Throwable) {
+                ToolResult(content = listOf(mapOf("type" to "text", "text" to (e.stackTraceToString()))), isError = true)
             }
         }
         else -> emptyMap<String, Any>()
