@@ -87,6 +87,25 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                         "type" to "object",
                         "properties" to emptyMap<String, Any>()
                     )
+                ),
+                ToolInfo(
+                    name = "get_clipboard",
+                    description = "Reads text from the system clipboard.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to emptyMap<String, Any>()
+                    )
+                ),
+                ToolInfo(
+                    name = "set_clipboard",
+                    description = "Writes text to the system clipboard.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to mapOf(
+                            "text" to mapOf("type" to "string")
+                        ),
+                        "required" to listOf("text")
+                    )
                 )
             ))
         }
@@ -127,6 +146,15 @@ private fun handleMethod(method: String, params: JsonNode?, server: Screenshotte
                         "type" to "text",
                         "text" to jacksonObjectMapper().writeValueAsString(tree)
                     )))
+                } else if (name == "get_clipboard") {
+                    val clip = ClipboardManager()
+                    val text = clip.getText() ?: ""
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to text)))
+                } else if (name == "set_clipboard") {
+                    val text = arguments?.get("text")?.asText() ?: ""
+                    val clip = ClipboardManager()
+                    clip.setText(text)
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to "Clipboard updated.")))
                 } else {
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Unknown tool: $name")))
                 }
