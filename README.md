@@ -98,3 +98,13 @@ The server exposes the following MCP tools to the AI:
   
 - `keyboard_action(action: string, text: string)`:
   Types a string of text into the currently focused UI element inside the sandbox.
+
+## 🧪 E2E Testing
+
+The project includes an End-to-End test suite (`e2e/test_gui.py`) that acts as a dummy MCP client to verify the complete lifecycle:
+
+```bash
+python3 e2e/test_gui.py
+```
+
+This test compiles a dummy Java Swing `SampleApp`, starts the MCP Server, launches the app inside the sandbox, reads the UI tree, clicks a button using coordinates, and verifies the visual result.

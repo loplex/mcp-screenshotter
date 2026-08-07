@@ -21,19 +21,20 @@ fun main(args: Array<String>) {
         if (exchange.requestMethod == "POST") {
             try {
                 val reqBody = InputStreamReader(exchange.requestBody, StandardCharsets.UTF_8).readText()
-                val request = mapper.readTree(reqBody)
-                val action = request.get("action")?.asText() ?: ""
+                @Suppress("UNCHECKED_CAST")
+                val request = mapper.readValue(reqBody, Map::class.java) as Map<String, Any>
+                val action = request["action"] as? String ?: ""
 
                 val response: MutableMap<String, Any?> = mutableMapOf("status" to "ok")
 
                 when (action) {
                     "takeScreenshot" -> {
-                        val x = request.get("x")?.asInt()
-                        val y = request.get("y")?.asInt()
-                        val width = request.get("width")?.asInt()
-                        val height = request.get("height")?.asInt()
-                        val threshold = request.get("threshold")?.asDouble() ?: -1.0
-                        val includeDeltas = request.get("includeDeltas")?.asBoolean() ?: false
+                        val x = (request["x"] as? Number)?.toInt()
+                        val y = (request["y"] as? Number)?.toInt()
+                        val width = (request["width"] as? Number)?.toInt()
+                        val height = (request["height"] as? Number)?.toInt()
+                        val threshold = (request["threshold"] as? Number)?.toDouble() ?: -1.0
+                        val includeDeltas = request["includeDeltas"] as? Boolean ?: false
 
                         val cropRect = if (x != null && y != null && width != null && height != null) {
                             java.awt.Rectangle(x, y, width, height)
@@ -62,14 +63,14 @@ fun main(args: Array<String>) {
                         }
                     }
                     "mouseAction" -> {
-                        val mouseAction = request.get("mouseAction")?.asText() ?: "move"
-                        val mx = request.get("x")?.asInt() ?: 0
-                        val my = request.get("y")?.asInt() ?: 0
+                        val mouseAction = request["mouseAction"] as? String ?: "move"
+                        val mx = (request["x"] as? Number)?.toInt() ?: 0
+                        val my = (request["y"] as? Number)?.toInt() ?: 0
                         serverLogic.mouseAction(mouseAction, mx, my)
                     }
                     "resizeWindow" -> {
-                        val rw = request.get("width")?.asInt() ?: 1024
-                        val rh = request.get("height")?.asInt() ?: 768
+                        val rw = (request["width"] as? Number)?.toInt() ?: 1024
+                        val rh = (request["height"] as? Number)?.toInt() ?: 768
                         serverLogic.resizeTopLevelWindows(rw, rh)
                     }
                     "getUiTree" -> {
@@ -79,13 +80,13 @@ fun main(args: Array<String>) {
                         response["text"] = clipboardManager.getText() ?: ""
                     }
                     "setClipboard" -> {
-                        clipboardManager.setText(request.get("text")?.asText() ?: "")
+                        clipboardManager.setText((request["text"] as? String) ?: "")
                     }
                     "highlightArea" -> {
-                        val hx = request.get("x")?.asInt() ?: 0
-                        val hy = request.get("y")?.asInt() ?: 0
-                        val hw = request.get("width")?.asInt() ?: 100
-                        val hh = request.get("height")?.asInt() ?: 100
+                        val hx = (request["x"] as? Number)?.toInt() ?: 0
+                        val hy = (request["y"] as? Number)?.toInt() ?: 0
+                        val hw = (request["width"] as? Number)?.toInt() ?: 100
+                        val hh = (request["height"] as? Number)?.toInt() ?: 100
                         val img = serverLogic.takeScreenshotWithHighlight(hx, hy, hw, hh)
                         response["imageB64"] = serverLogic.imageToBase64(img)
                     }

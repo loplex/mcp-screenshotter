@@ -1,6 +1,5 @@
 package cz.loplex.mcp.screenshotter.server
 
-import tools.jackson.databind.JsonNode
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -11,8 +10,8 @@ import java.net.http.HttpResponse
 import java.nio.file.Paths
 import java.util.Scanner
 
-data class JsonRpcRequest(val jsonrpc: String, val id: JsonNode?, val method: String, val params: JsonNode?)
-data class JsonRpcResponse(val jsonrpc: String = "2.0", val id: JsonNode?, val result: Any? = null, val error: Any? = null)
+data class JsonRpcRequest(val jsonrpc: String, val id: Any?, val method: String, val params: Map<String, Any>?)
+data class JsonRpcResponse(val jsonrpc: String = "2.0", val id: Any?, val result: Any? = null, val error: Any? = null)
 data class ToolInfo(val name: String, val description: String, val inputSchema: Map<String, Any>)
 data class InitResult(val protocolVersion: String, val capabilities: Map<String, Any>, val serverInfo: Map<String, Any>)
 data class ToolResult(val content: List<Map<String, Any>>, val isError: Boolean = false)
@@ -105,7 +104,7 @@ class SandboxManager {
         Runtime.getRuntime().addShutdownHook(Thread { stop() })
     }
     
-    fun sendCommand(command: Map<String, Any?>): JsonNode {
+    fun sendCommand(command: Map<String, Any?>): Map<String, Any> {
         val reqJson = mapper.writeValueAsString(command)
         
         val request = HttpRequest.newBuilder()
@@ -116,11 +115,12 @@ class SandboxManager {
             
         val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
         
-        val resJson = mapper.readTree(response.body()) as tools.jackson.databind.node.ObjectNode
-        if (resJson.get("status")?.asText() == "error") {
-            throw RuntimeException(resJson.get("error")?.asText() ?: "Unknown worker error")
+        @Suppress("UNCHECKED_CAST")
+        val resMap = mapper.readValue(response.body(), Map::class.java) as Map<String, Any>
+        if (resMap["status"] == "error") {
+            throw RuntimeException((resMap["error"] as? String) ?: "Unknown worker error")
         }
-        return resJson
+        return resMap
     }
     
     fun launchApp(command: String): Int {
@@ -179,7 +179,7 @@ fun main() {
     sandbox.stop()
 }
 
-private fun handleMethod(method: String, params: JsonNode?): Any? {
+private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
     val mapper = jacksonObjectMapper()
     return when (method) {
         "initialize" -> {
@@ -284,27 +284,27 @@ private fun handleMethod(method: String, params: JsonNode?): Any? {
             ))
         }
         "tools/call" -> {
-            val name = params?.get("name")?.asText()
-            val arguments = params?.get("arguments") as? tools.jackson.databind.node.ObjectNode
+            val name = params?.get("name") as? String
+            @Suppress("UNCHECKED_CAST")
+            val arguments = params?.get("arguments") as? Map<String, Any>
             
             try {
                 if (name == "get_screenshot") {
                     val req = mutableMapOf<String, Any?>("action" to "takeScreenshot")
-                    arguments?.properties()?.forEach { 
-                        val n = it.value
-                        req[it.key] = if (n.isNull) null else if (n.isNumber) n.asDouble() else if (n.isBoolean) n.asBoolean() else n.asText() 
+                    if (arguments != null) {
+                        req.putAll(arguments)
                     }
                     // Map snake_case to camelCase
                     if (req.containsKey("include_deltas")) req["includeDeltas"] = req.remove("include_deltas")
                     
                     val res = sandbox.sendCommand(req)
                     
-                    if ((res.get("changed") as? tools.jackson.databind.JsonNode)?.asBoolean() == false) {
+                    if (res["changed"] == false) {
                         ToolResult(content = listOf(mapOf(
                             "type" to "text",
                             "text" to mapper.writeValueAsString(mapOf(
                                 "changed" to false,
-                                "changed_areas" to res.get("changedAreas")
+                                "changed_areas" to res["changedAreas"]
                             ))
                         )))
                     } else {
@@ -312,13 +312,13 @@ private fun handleMethod(method: String, params: JsonNode?): Any? {
                             mapOf(
                                 "type" to "image",
                                 "mimeType" to "image/png",
-                                "data" to (res.get("imageB64") as tools.jackson.databind.JsonNode).asText()
+                                "data" to (res["imageB64"] as String)
                             )
                         )
                         if (req["includeDeltas"] == true) {
                             content.add(mapOf(
                                 "type" to "text",
-                                "text" to mapper.writeValueAsString(mapOf("changed_areas" to res.get("changedAreas")))
+                                "text" to mapper.writeValueAsString(mapOf("changed_areas" to res["changedAreas"]))
                             ))
                         }
                         ToolResult(content = content)
@@ -326,48 +326,48 @@ private fun handleMethod(method: String, params: JsonNode?): Any? {
                 } else if (name == "mouse_action") {
                     sandbox.sendCommand(mapOf(
                         "action" to "mouseAction",
-                        "mouseAction" to (arguments?.get("action")?.asText() ?: "move"),
-                        "x" to (arguments?.get("x")?.asInt() ?: 0),
-                        "y" to (arguments?.get("y")?.asInt() ?: 0)
+                        "mouseAction" to (arguments?.get("action") as? String ?: "move"),
+                        "x" to ((arguments?.get("x") as? Number)?.toInt() ?: 0),
+                        "y" to ((arguments?.get("y") as? Number)?.toInt() ?: 0)
                     ))
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Mouse action executed.")))
                 } else if (name == "resize_window") {
                     sandbox.sendCommand(mapOf(
                         "action" to "resizeWindow",
-                        "width" to (arguments?.get("width")?.asInt() ?: 1024),
-                        "height" to (arguments?.get("height")?.asInt() ?: 768)
+                        "width" to ((arguments?.get("width") as? Number)?.toInt() ?: 1024),
+                        "height" to ((arguments?.get("height") as? Number)?.toInt() ?: 768)
                     ))
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Window resized.")))
                 } else if (name == "get_ui_tree") {
                     val res = sandbox.sendCommand(mapOf("action" to "getUiTree"))
-                    ToolResult(content = listOf(mapOf("type" to "text", "text" to mapper.writeValueAsString(res.get("tree")))))
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to mapper.writeValueAsString(res["tree"]))))
                 } else if (name == "get_clipboard") {
-                    val res = sandbox.sendCommand(mapOf("action" to "getClipboard")) as tools.jackson.databind.node.ObjectNode
-                    ToolResult(content = listOf(mapOf("type" to "text", "text" to (res.get("text")?.asText() ?: ""))))
+                    val res = sandbox.sendCommand(mapOf("action" to "getClipboard"))
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to ((res["text"] as? String) ?: ""))))
                 } else if (name == "set_clipboard") {
-                    sandbox.sendCommand(mapOf("action" to "setClipboard", "text" to (arguments?.get("text")?.asText() ?: "")))
+                    sandbox.sendCommand(mapOf("action" to "setClipboard", "text" to ((arguments?.get("text") as? String) ?: "")))
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Clipboard updated.")))
                 } else if (name == "highlight_area") {
                     val res = sandbox.sendCommand(mapOf(
                         "action" to "highlightArea",
-                        "x" to (arguments?.get("x")?.asInt() ?: 0),
-                        "y" to (arguments?.get("y")?.asInt() ?: 0),
-                        "width" to (arguments?.get("width")?.asInt() ?: 100),
-                        "height" to (arguments?.get("height")?.asInt() ?: 100)
+                        "x" to ((arguments?.get("x") as? Number)?.toInt() ?: 0),
+                        "y" to ((arguments?.get("y") as? Number)?.toInt() ?: 0),
+                        "width" to ((arguments?.get("width") as? Number)?.toInt() ?: 100),
+                        "height" to ((arguments?.get("height") as? Number)?.toInt() ?: 100)
                     ))
                     ToolResult(content = listOf(mapOf(
                         "type" to "image",
                         "mimeType" to "image/png",
-                        "data" to (res.get("imageB64") as tools.jackson.databind.JsonNode).asText()
+                        "data" to (res["imageB64"] as String)
                     )))
                 } else if (name == "detect_ui_elements") {
                     val res = sandbox.sendCommand(mapOf("action" to "detectUiElements"))
                     ToolResult(content = listOf(mapOf(
                         "type" to "text",
-                        "text" to mapper.writeValueAsString(mapOf("detected_elements" to res.get("detectedElements")))
+                        "text" to mapper.writeValueAsString(mapOf("detected_elements" to res["detectedElements"]))
                     )))
                 } else if (name == "launch_app") {
-                    val command = arguments?.get("command")?.asText() ?: ""
+                    val command = (arguments?.get("command") as? String) ?: ""
                     if (command.isBlank()) {
                         ToolResult(content = listOf(mapOf("type" to "text", "text" to "Error: Command cannot be empty.")), isError = true)
                     } else {
