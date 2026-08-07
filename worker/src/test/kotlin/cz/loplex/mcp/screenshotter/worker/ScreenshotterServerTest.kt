@@ -1,4 +1,4 @@
-package cz.loplex.mcp.screenshotter
+package cz.loplex.mcp.screenshotter.worker
 
 import org.junit.jupiter.api.Test
 import java.awt.Color

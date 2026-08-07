@@ -1,0 +1,389 @@
+package cz.loplex.mcp.screenshotter.server
+
+import tools.jackson.databind.JsonNode
+import tools.jackson.module.kotlin.jacksonObjectMapper
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.file.Paths
+import java.util.Scanner
+
+data class JsonRpcRequest(val jsonrpc: String, val id: JsonNode?, val method: String, val params: JsonNode?)
+data class JsonRpcResponse(val jsonrpc: String = "2.0", val id: JsonNode?, val result: Any? = null, val error: Any? = null)
+data class ToolInfo(val name: String, val description: String, val inputSchema: Map<String, Any>)
+data class InitResult(val protocolVersion: String, val capabilities: Map<String, Any>, val serverInfo: Map<String, Any>)
+data class ToolResult(val content: List<Map<String, Any>>, val isError: Boolean = false)
+
+class SandboxManager {
+    private var xephyrProc: Process? = null
+    private var dbusProc: Process? = null
+    private var atSpiProc: Process? = null
+    private var workerProc: Process? = null
+    
+    private var workerPort: Int = -1
+    private val mapper = jacksonObjectMapper()
+    private val httpClient = HttpClient.newHttpClient()
+    private var sandboxEnv: Map<String, String>? = null
+
+    fun start() {
+        System.err.println("Starting sandbox environment...")
+        
+        // 1. Start Xephyr
+        val displayNum = findFreeDisplay()
+        val display = ":$displayNum"
+        xephyrProc = ProcessBuilder("Xephyr", "-screen", "1024x768", display).start()
+        Thread.sleep(1000) // Wait for X11 to initialize
+        
+        System.err.println("Xephyr started on $display")
+
+        // 2. Start D-Bus
+        val dbusOutput = ProcessBuilder("dbus-daemon", "--session", "--print-address=1", "--print-pid=1", "--fork")
+            .start().inputStream.bufferedReader().readText().trim().split("\n")
+        val dbusAddress = dbusOutput[0]
+        
+        System.err.println("D-Bus started at $dbusAddress")
+
+        // Base minimal environment for the sandbox
+        sandboxEnv = mutableMapOf(
+            "DISPLAY" to display,
+            "DBUS_SESSION_BUS_ADDRESS" to dbusAddress,
+            "HOME" to (System.getenv("HOME") ?: "/tmp"),
+            "PATH" to (System.getenv("PATH") ?: "/usr/bin:/bin")
+        )
+        System.getenv("USER")?.let { (sandboxEnv as MutableMap)["USER"] = it }
+
+        // 3. Start AT-SPI2
+        val pbAtSpi = ProcessBuilder("/usr/libexec/at-spi-bus-launcher", "--launch-immediately")
+        pbAtSpi.environment().clear()
+        pbAtSpi.environment().putAll(sandboxEnv!!)
+        atSpiProc = pbAtSpi.start()
+        Thread.sleep(1000)
+
+        // 4. Start Worker
+        val workerJar = Paths.get("worker/target/screenshotter-worker-0.1.0-SNAPSHOT-jar-with-dependencies.jar").toAbsolutePath().toString()
+        val pbWorker = ProcessBuilder("java", "-Djava.awt.headless=false", "-jar", workerJar, "0")
+        
+        // Use strictly isolated environment
+        pbWorker.environment().clear()
+        pbWorker.environment().putAll(sandboxEnv!!)
+        
+        // We will read worker's stderr to find out what port it started on
+        pbWorker.redirectErrorStream(true)
+        workerProc = pbWorker.start()
+        
+        val workerOut = BufferedReader(InputStreamReader(workerProc!!.inputStream, "UTF-8"))
+        var portFound = false
+        // Read lines until we find the port
+        while (true) {
+            val line = workerOut.readLine() ?: break
+            System.err.println("[Worker] $line")
+            if (line.contains("Worker started on HTTP port ")) {
+                workerPort = line.substringAfter("Worker started on HTTP port ").substringBefore(" ").toInt()
+                portFound = true
+                break
+            }
+        }
+        
+        if (!portFound) {
+            throw RuntimeException("Failed to read HTTP port from worker process.")
+        }
+        
+        // Start a thread to keep dumping worker logs to stderr
+        Thread {
+            try {
+                while (true) {
+                    val line = workerOut.readLine() ?: break
+                    System.err.println("[Worker] $line")
+                }
+            } catch (ignored: Exception) {}
+        }.start()
+        
+        // Ensure cleanup on shutdown
+        Runtime.getRuntime().addShutdownHook(Thread { stop() })
+    }
+    
+    fun sendCommand(command: Map<String, Any?>): JsonNode {
+        val reqJson = mapper.writeValueAsString(command)
+        
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("http://127.0.0.1:$workerPort/execute"))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(reqJson))
+            .build()
+            
+        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        
+        val resJson = mapper.readTree(response.body()) as tools.jackson.databind.node.ObjectNode
+        if (resJson.get("status")?.asText() == "error") {
+            throw RuntimeException(resJson.get("error")?.asText() ?: "Unknown worker error")
+        }
+        return resJson
+    }
+    
+    fun launchApp(command: String): Int {
+        val pb = ProcessBuilder("sh", "-c", command)
+        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        pb.redirectError(ProcessBuilder.Redirect.INHERIT)
+        pb.environment().clear()
+        sandboxEnv?.let { pb.environment().putAll(it) }
+        val proc = pb.start()
+        return proc.pid().toInt()
+    }
+
+    private fun findFreeDisplay(): Int {
+        for (i in 1..99) {
+            if (!java.io.File("/tmp/.X11-unix/X$i").exists()) {
+                return i
+            }
+        }
+        return 99
+    }
+
+    fun stop() {
+        workerProc?.destroy()
+        atSpiProc?.destroy()
+        xephyrProc?.destroy()
+    }
+}
+
+// Global sandbox instance
+val sandbox = SandboxManager()
+
+fun main() {
+    sandbox.start()
+    
+    val mapper = jacksonObjectMapper()
+    val scanner = Scanner(System.`in`)
+    System.err.println("MCP Server started (Headless Orchestrator mode).")
+
+    while (scanner.hasNextLine()) {
+        val line = scanner.nextLine()
+        if (line.isBlank()) continue
+
+        try {
+            val request = mapper.readValue(line, JsonRpcRequest::class.java)
+            val responseResult = handleMethod(request.method, request.params)
+            
+            if (request.id != null) {
+                val response = JsonRpcResponse(id = request.id, result = responseResult)
+                println(mapper.writeValueAsString(response))
+            }
+        } catch (e: Throwable) {
+            System.err.println("Error processing message: ${e.message}")
+            e.printStackTrace(System.err)
+        }
+    }
+    sandbox.stop()
+}
+
+private fun handleMethod(method: String, params: JsonNode?): Any? {
+    val mapper = jacksonObjectMapper()
+    return when (method) {
+        "initialize" -> {
+            InitResult(
+                protocolVersion = "2024-11-05",
+                capabilities = mapOf("tools" to emptyMap<String, Any>()),
+                serverInfo = mapOf("name" to "screenshotter-mcp-server", "version" to "0.2.0")
+            )
+        }
+        "initialized" -> emptyMap<String, Any>()
+        "tools/list" -> {
+            mapOf("tools" to listOf(
+                ToolInfo(
+                    name = "get_screenshot",
+                    description = "Takes a screenshot of the current environment.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to mapOf(
+                            "x" to mapOf("type" to "integer"),
+                            "y" to mapOf("type" to "integer"),
+                            "width" to mapOf("type" to "integer"),
+                            "height" to mapOf("type" to "integer"),
+                            "include_deltas" to mapOf("type" to "boolean"),
+                            "threshold" to mapOf("type" to "number")
+                        )
+                    )
+                ),
+                ToolInfo(
+                    name = "mouse_action",
+                    description = "Performs a mouse action at the given coordinates.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "required" to listOf("action", "x", "y"),
+                        "properties" to mapOf(
+                            "action" to mapOf("type" to "string"),
+                            "x" to mapOf("type" to "integer"),
+                            "y" to mapOf("type" to "integer")
+                        )
+                    )
+                ),
+                ToolInfo(
+                    name = "resize_window",
+                    description = "Resizes the active window.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "required" to listOf("width", "height"),
+                        "properties" to mapOf(
+                            "width" to mapOf("type" to "integer"),
+                            "height" to mapOf("type" to "integer")
+                        )
+                    )
+                ),
+                ToolInfo(
+                    name = "get_ui_tree",
+                    description = "Gets the AT-SPI accessibility tree.",
+                    inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+                ),
+                ToolInfo(
+                    name = "get_clipboard",
+                    description = "Reads text from the clipboard.",
+                    inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+                ),
+                ToolInfo(
+                    name = "set_clipboard",
+                    description = "Writes text to the clipboard.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to mapOf("text" to mapOf("type" to "string")),
+                        "required" to listOf("text")
+                    )
+                ),
+                ToolInfo(
+                    name = "highlight_area",
+                    description = "Takes a screenshot with a red highlight box.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "required" to listOf("x", "y", "width", "height"),
+                        "properties" to mapOf(
+                            "x" to mapOf("type" to "integer"),
+                            "y" to mapOf("type" to "integer"),
+                            "width" to mapOf("type" to "integer"),
+                            "height" to mapOf("type" to "integer")
+                        )
+                    )
+                ),
+                ToolInfo(
+                    name = "detect_ui_elements",
+                    description = "Uses OpenCV to visually detect bounds of UI elements.",
+                    inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+                ),
+                ToolInfo(
+                    name = "launch_app",
+                    description = "Launches an application inside the isolated GUI environment.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "properties" to mapOf(
+                            "command" to mapOf("type" to "string", "description" to "The shell command to execute, e.g., 'java -cp e2e SampleApp'.")
+                        ),
+                        "required" to listOf("command")
+                    )
+                )
+            ))
+        }
+        "tools/call" -> {
+            val name = params?.get("name")?.asText()
+            val arguments = params?.get("arguments") as? tools.jackson.databind.node.ObjectNode
+            
+            try {
+                if (name == "get_screenshot") {
+                    val req = mutableMapOf<String, Any?>("action" to "takeScreenshot")
+                    arguments?.properties()?.forEach { 
+                        val n = it.value
+                        req[it.key] = if (n.isNull) null else if (n.isNumber) n.asDouble() else if (n.isBoolean) n.asBoolean() else n.asText() 
+                    }
+                    // Map snake_case to camelCase
+                    if (req.containsKey("include_deltas")) req["includeDeltas"] = req.remove("include_deltas")
+                    
+                    val res = sandbox.sendCommand(req)
+                    
+                    if ((res.get("changed") as? tools.jackson.databind.JsonNode)?.asBoolean() == false) {
+                        ToolResult(content = listOf(mapOf(
+                            "type" to "text",
+                            "text" to mapper.writeValueAsString(mapOf(
+                                "changed" to false,
+                                "changed_areas" to res.get("changedAreas")
+                            ))
+                        )))
+                    } else {
+                        val content = mutableListOf<Map<String, Any>>(
+                            mapOf(
+                                "type" to "image",
+                                "mimeType" to "image/png",
+                                "data" to (res.get("imageB64") as tools.jackson.databind.JsonNode).asText()
+                            )
+                        )
+                        if (req["includeDeltas"] == true) {
+                            content.add(mapOf(
+                                "type" to "text",
+                                "text" to mapper.writeValueAsString(mapOf("changed_areas" to res.get("changedAreas")))
+                            ))
+                        }
+                        ToolResult(content = content)
+                    }
+                } else if (name == "mouse_action") {
+                    sandbox.sendCommand(mapOf(
+                        "action" to "mouseAction",
+                        "mouseAction" to (arguments?.get("action")?.asText() ?: "move"),
+                        "x" to (arguments?.get("x")?.asInt() ?: 0),
+                        "y" to (arguments?.get("y")?.asInt() ?: 0)
+                    ))
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to "Mouse action executed.")))
+                } else if (name == "resize_window") {
+                    sandbox.sendCommand(mapOf(
+                        "action" to "resizeWindow",
+                        "width" to (arguments?.get("width")?.asInt() ?: 1024),
+                        "height" to (arguments?.get("height")?.asInt() ?: 768)
+                    ))
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to "Window resized.")))
+                } else if (name == "get_ui_tree") {
+                    val res = sandbox.sendCommand(mapOf("action" to "getUiTree"))
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to mapper.writeValueAsString(res.get("tree")))))
+                } else if (name == "get_clipboard") {
+                    val res = sandbox.sendCommand(mapOf("action" to "getClipboard")) as tools.jackson.databind.node.ObjectNode
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to (res.get("text")?.asText() ?: ""))))
+                } else if (name == "set_clipboard") {
+                    sandbox.sendCommand(mapOf("action" to "setClipboard", "text" to (arguments?.get("text")?.asText() ?: "")))
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to "Clipboard updated.")))
+                } else if (name == "highlight_area") {
+                    val res = sandbox.sendCommand(mapOf(
+                        "action" to "highlightArea",
+                        "x" to (arguments?.get("x")?.asInt() ?: 0),
+                        "y" to (arguments?.get("y")?.asInt() ?: 0),
+                        "width" to (arguments?.get("width")?.asInt() ?: 100),
+                        "height" to (arguments?.get("height")?.asInt() ?: 100)
+                    ))
+                    ToolResult(content = listOf(mapOf(
+                        "type" to "image",
+                        "mimeType" to "image/png",
+                        "data" to (res.get("imageB64") as tools.jackson.databind.JsonNode).asText()
+                    )))
+                } else if (name == "detect_ui_elements") {
+                    val res = sandbox.sendCommand(mapOf("action" to "detectUiElements"))
+                    ToolResult(content = listOf(mapOf(
+                        "type" to "text",
+                        "text" to mapper.writeValueAsString(mapOf("detected_elements" to res.get("detectedElements")))
+                    )))
+                } else if (name == "launch_app") {
+                    val command = arguments?.get("command")?.asText() ?: ""
+                    if (command.isBlank()) {
+                        ToolResult(content = listOf(mapOf("type" to "text", "text" to "Error: Command cannot be empty.")), isError = true)
+                    } else {
+                        val pid = sandbox.launchApp(command)
+                        ToolResult(content = listOf(mapOf(
+                            "type" to "text", 
+                            "text" to "Application launched successfully with PID $pid inside the sandbox."
+                        )))
+                    }
+                } else {
+                    ToolResult(content = listOf(mapOf("type" to "text", "text" to "Unknown tool: $name")))
+                }
+            } catch (e: Throwable) {
+                ToolResult(content = listOf(mapOf("type" to "text", "text" to (e.message ?: e.toString()))), isError = true)
+            }
+        }
+        else -> emptyMap<String, Any>()
+    }
+}

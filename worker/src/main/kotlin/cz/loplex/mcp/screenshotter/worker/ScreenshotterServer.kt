@@ -1,4 +1,4 @@
-package cz.loplex.mcp.screenshotter
+package cz.loplex.mcp.screenshotter.worker
 
 import java.awt.AWTException
 import java.awt.Rectangle

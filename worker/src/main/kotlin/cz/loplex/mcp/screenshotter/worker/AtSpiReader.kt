@@ -1,4 +1,4 @@
-package cz.loplex.mcp.screenshotter
+package cz.loplex.mcp.screenshotter.worker
 
 import com.sun.jna.Library
 import com.sun.jna.Native
