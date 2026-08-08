@@ -5,3 +5,4 @@ target/
 .gradle/
 build/
 e2e/output/
+e2e/__pycache__/

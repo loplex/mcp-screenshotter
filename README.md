@@ -1,59 +1,87 @@
 # MCP Screenshotter
 
-A headless **Model Context Protocol (MCP)** server that empowers AI assistants (like Claude) to safely interact with, test, and control Linux GUI applications inside a fully isolated virtual X11 sandbox.
+A headless Model Context Protocol (MCP) server that provides a completely isolated, sandboxed X11 graphical environment for AI agents to launch and interact with GUI applications without affecting the user's host environment.
 
-By utilizing **Xephyr**, **AT-SPI2** (Accessibility Toolkit), and **D-Bus**, this tool creates a secure, sterile desktop environment. The AI can launch applications, read their UI structure, perform mouse/keyboard actions, and capture visual feedback without any risk of interfering with the host's actual graphical environment.
+## Overview
 
-## 🏗️ Architecture
+MCP Screenshotter allows an AI (like Claude) to safely run, observe, and interact with graphical Linux applications within an invisible sandbox. The architecture is split into two components to ensure absolute isolation:
 
-The project is built as a multi-module Maven application to guarantee complete environment isolation:
+1. **Headless Orchestrator (`server`)**: Communicates with the AI via standard MCP standard I/O streams. It runs on the host and spins up the sandbox environment (`Xephyr`, `dbus`, `at-spi2`).
+2. **Sandboxed Worker (`worker`)**: Runs inside the isolated `Xephyr` display and communicates back to the Orchestrator via a local HTTP API. It performs all the heavy lifting: capturing screenshots, simulating mouse/keyboard input, and extracting UI trees.
 
-1. **`screenshotter-server` (The Orchestrator)**:
-   - Runs on the host system and speaks the standard MCP JSON-RPC protocol over Stdio (e.g., with Claude Desktop).
-   - Responsible for launching the isolated environment (`Xephyr` on a dynamic display, isolated `D-Bus`, and `at-spi-bus-launcher`).
-   - Ensures no host environment variables (like Wayland or host DBus addresses) leak into the sandbox.
-   - Forwards AI tool calls to the worker via a lightweight local HTTP API.
+## Features
 
-2. **`screenshotter-worker` (The Isolated Worker)**:
-   - Runs *exclusively* inside the Xephyr sandbox.
-   - Hosts a fast local HTTP server to receive commands from the Server module.
-   - Communicates with running applications using Java AWT (`Robot`) for native mouse/keyboard events and `AtSpiReader` (JNA) for traversing the accessibility tree.
-   - Captures screenshots of the isolated X11 display.
+- **Isolated GUI Sandbox**: Uses `Xephyr` to create a virtual X11 display that is invisible and completely disconnected from the user's desktop.
+- **Visual Interaction**: Takes screenshots (including optional delta-encoding for changes) to let the AI "see" the application.
+- **Accessibility Tree Extraction**: Hooks into `AT-SPI2` over D-Bus to extract a structured UI element tree (buttons, inputs, coordinates), allowing the AI to click elements precisely.
+- **Computer Vision Fallback**: Uses OpenCV edge detection to identify clickable bounding boxes when an application (e.g., Python Tkinter) does not support the accessibility API.
+- **Input Simulation**: Uses `java.awt.Robot` to simulate physical mouse clicks, movements, and typing inside the sandbox.
+- **Clipboard Management**: Can read and write to the isolated sandbox clipboard.
 
-## 🚀 Features
+## Architecture
 
-- **Strict Isolation**: GUI apps cannot see, capture, or interact with the user's host desktop.
-- **Accessibility Tree Parsing**: Extracts a structured, semantic JSON representation of the GUI (buttons, text fields, checkboxes, bounding boxes) using AT-SPI2.
-- **Smart Deltas**: Can compute pixel-level bounding box differences between interactions to optimize LLM visual token usage.
-- **Native Interaction**: Emulates real hardware mouse clicks and keystrokes using X11 bindings.
-- **Dynamic Port & Display Resolution**: Automatically finds free X11 displays and HTTP ports on startup.
-
-## 📋 Prerequisites
-
-To build and run this project, you need a Linux environment with the following dependencies installed:
-
-- **Java**: JDK 11+ for compiling the server/worker (Java 8 is supported/required for running ATK wrapper legacy apps).
-- **Maven**: For building the project.
-- **Xephyr**: Nested X server (`xserver-xephyr` on Debian/Ubuntu).
-- **AT-SPI2**: Linux Accessibility toolkit (`at-spi2-core`).
-
-## 🛠️ Building the Project
-
-Compile the multi-module Maven project and build fat jars:
-
-```bash
-mvn clean package -Dmaven.test.skip=true
+```
+[ AI Assistant (Claude) ]
+       | (MCP stdio)
+       v
+[ Headless Orchestrator (Main.kt) ]
+       | 1. Starts Xephyr (e.g. :99)
+       | 2. Starts isolated DBus & AT-SPI2
+       | 3. Starts Worker in the sandbox
+       |
+       | (HTTP POST /execute)
+       v
+[ Sandboxed Worker (WorkerMain.kt) ] --> java.awt.Robot (Input)
+       |                             --> OpenCV (Vision Fallback)
+       |                             --> AT-SPI2 (UI Tree)
+       v
+[ Target GUI Application ]
 ```
 
-This will output two executable jars:
-- `server/target/screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar`
-- `worker/target/screenshotter-worker-0.2.0-SNAPSHOT-jar-with-dependencies.jar`
+## Requirements
 
-## ⚙️ Usage & Configuration
+- **Java 17** or higher
+- **Maven** 3.8+
+- **Xephyr** (`xserver-xephyr`)
+- **D-Bus** (`dbus-x11`)
+- **AT-SPI2** (`at-spi2-core`)
+- **Python 3**, **PyGObject** (`python3-gi`) & **GTK 3** (`gir1.2-gtk-3.0`) - for running the E2E test app's sample GTK application
 
-### 1. Claude Desktop Integration
+On Debian/Ubuntu:
+```bash
+sudo apt update
+sudo apt install xserver-xephyr dbus-x11 at-spi2-core python3-gi gir1.2-gtk-3.0
+```
 
-To give Claude Desktop access to the sandbox, add the server to your `claude_desktop_config.json` (typically located at `~/.config/Claude/claude_desktop_config.json`):
+## Build and Run
+
+1. **Compile and Package:**
+   ```bash
+   mvn clean package -DskipTests
+   ```
+   This produces `screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar` and the corresponding worker jar.
+
+2. **Run E2E Tests:**
+   A full GUI end-to-end test is provided, which spins up the MCP server, launches a Python test application, finds a button using OpenCV/AT-SPI2, clicks it, and verifies the screenshot.
+   ```bash
+   python3 e2e/test_gui.py
+   ```
+   The resulting screenshot will be saved to `e2e/output/final_screenshot.png`.
+
+## Available MCP Tools
+
+- `launch_app`: Execute a bash command inside the sandbox to start a GUI application.
+- `get_screenshot`: Returns a base64 encoded PNG. Can return only bounding boxes of changed areas if `threshold` and `include_deltas` are used.
+- `get_ui_tree`: Returns a structured JSON representation of the active window's UI elements via AT-SPI2.
+- `detect_ui_elements`: Fallback tool that uses OpenCV edge detection to find rectangular UI components.
+- `mouse_action`: Move, click, double-click, or drag at specific X, Y coordinates.
+- `get_clipboard` / `set_clipboard`: Interact with the sandbox clipboard.
+- `resize_window`: Resizes all top-level windows in the sandbox display.
+- `highlight_area`: Returns a screenshot with a red bounding box drawn over a specified area.
+
+## Usage with Claude Desktop
+
+Add the following configuration to your `claude_desktop_config.json`:
 
 ```json
 {
@@ -69,42 +97,7 @@ To give Claude Desktop access to the sandbox, add the server to your `claude_des
 }
 ```
 
-Restart Claude Desktop, and you can now ask the AI to:
-> *"Launch my GUI app using `launch_app` and navigate through its menus to test the login screen."*
+## Troubleshooting
 
-### 2. Testing via MCP Inspector
-
-You can manually test the tools using the official MCP Inspector in your browser:
-
-```bash
-npx -y @modelcontextprotocol/inspector java -jar server/target/screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar
-```
-
-## 🧰 Available MCP Tools
-
-The server exposes the following MCP tools to the AI:
-
-- `launch_app(command: string)`:
-  Executes a terminal command *inside* the Xephyr sandbox. Used to start the target application.
-  
-- `get_ui_tree()`:
-  Reads the AT-SPI2 accessibility tree and returns a semantic JSON representation of the visible UI elements and their coordinates.
-
-- `get_screenshot(threshold?: number)`:
-  Captures the current state of the sandbox display. Returns a Base64-encoded PNG image. Can optionally calculate visual deltas.
-
-- `mouse_action(action: string, x: number, y: number, button?: number)`:
-  Moves the mouse to `(x, y)` and performs the specified action (`move`, `click`).
-  
-- `keyboard_action(action: string, text: string)`:
-  Types a string of text into the currently focused UI element inside the sandbox.
-
-## 🧪 E2E Testing
-
-The project includes an End-to-End test suite (`e2e/test_gui.py`) that acts as a dummy MCP client to verify the complete lifecycle:
-
-```bash
-python3 e2e/test_gui.py
-```
-
-This test compiles a dummy Java Swing `SampleApp`, starts the MCP Server, launches the app inside the sandbox, reads the UI tree, clicks a button using coordinates, and verifies the visual result.
+- **"Cannot connect to X server"**: Ensure `Xephyr` is installed. The orchestrator automatically scans for a free display from `:1` to `:99`.
+- **"AT-SPI2 failed"**: If your test application does not export an accessibility tree (like standard Python Tkinter), the server will smoothly fallback to OpenCV for visual bounding boxes. GTK and Qt applications usually support AT-SPI2 natively.
