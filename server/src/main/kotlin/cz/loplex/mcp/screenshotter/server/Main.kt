@@ -2,11 +2,13 @@ package cz.loplex.mcp.screenshotter.server
 
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Scanner
 
@@ -19,10 +21,19 @@ data class ToolResult(val content: List<Map<String, Any>>, val isError: Boolean 
 class SandboxManager {
     private var xephyrProc: Process? = null
     private var dbusProc: Process? = null
-    private var dbusPgid: Int = -1
     private var atSpiProc: Process? = null
     private var workerProc: Process? = null
-    private val launchedAppPgids = mutableListOf<Int>()
+    private var watchdogProc: Process? = null
+
+    // Both created eagerly (not lazily inside start()) so their paths are known before
+    // startWatchdog() builds its cleanup script, and both are reaped by that script too - not
+    // just by stop() - so a crash doesn't leave them behind either.
+    private val sandboxHome: File = Files.createTempDirectory("mcp-screenshotter-home-").toFile()
+
+    // Every tracked process is started via `setsid` (see startTracked()), so its pgid equals its
+    // own pid; both this process (in stop()) and the crash-only watchdog (see startWatchdog())
+    // reap groups by reading this same file, so there's exactly one place that knows about them.
+    private val pgidRegistryFile: File = Files.createTempFile("mcp-screenshotter-pgids-", ".txt").toFile()
 
     private var workerPort: Int = -1
     private val mapper = jacksonObjectMapper()
@@ -31,25 +42,27 @@ class SandboxManager {
 
     fun start() {
         System.err.println("Starting sandbox environment...")
-        
+
+        // Start the watchdog first, before anything it might need to clean up even exists -
+        // see startWatchdog() for how it detects our death and why.
+        startWatchdog()
+
         // 1. Start Xephyr
         val displayNum = findFreeDisplay()
         val display = ":$displayNum"
-        xephyrProc = ProcessBuilder("Xephyr", "-screen", "1024x768", display).start()
+        xephyrProc = startTracked(listOf("Xephyr", "-screen", "1024x768", display))
         Thread.sleep(1000) // Wait for X11 to initialize
-        
+
         System.err.println("Xephyr started on $display")
 
         // 2. Start D-Bus
-        // Deliberately run in the foreground (--nofork) inside its own `setsid` session: this
-        // keeps a live Process handle instead of letting the daemon fork-and-detach into a PID
-        // we never captured (the leak described in FUTURE_WORK #9), and the `setsid` group lets
-        // stop() reap it - and any D-Bus-activated helper it spawns - as a single unit via
-        // killProcessGroup(), instead of leaving them orphaned.
-        val pbDbus = ProcessBuilder("setsid", "dbus-daemon", "--session", "--print-address=1", "--nofork")
-        pbDbus.redirectErrorStream(true)
-        dbusProc = pbDbus.start()
-        dbusPgid = dbusProc!!.pid().toInt()
+        // Deliberately run in the foreground (--nofork): this keeps a live Process handle
+        // instead of letting the daemon fork-and-detach into a PID we never captured (the leak
+        // described in FUTURE_WORK #9). startTracked()'s `setsid` group lets stop() (or the
+        // watchdog) reap it - and any D-Bus-activated helper it spawns - as a single unit.
+        dbusProc = startTracked(listOf("dbus-daemon", "--session", "--print-address=1", "--nofork")) { pb ->
+            pb.redirectErrorStream(true)
+        }
 
         val dbusOut = BufferedReader(InputStreamReader(dbusProc!!.inputStream, "UTF-8"))
         val dbusAddress = dbusOut.readLine()?.trim()
@@ -62,36 +75,44 @@ class SandboxManager {
             } catch (ignored: Exception) {}
         }.start()
 
-        System.err.println("D-Bus started at $dbusAddress (pgid=$dbusPgid)")
+        System.err.println("D-Bus started at $dbusAddress")
+
+        // A dedicated, throwaway HOME for the sandbox: reusing the real user's HOME would leak
+        // their actual GTK theme/font/icon overrides (~/.config/gtk-3.0/settings.ini) and dconf
+        // settings into launched apps, so the same test could render differently depending on
+        // whose machine (and whose desktop config) it runs on. Pin a fixed theme/font on top of
+        // that isolation so rendering is deterministic across machines, not just clean.
+        writeGtkSettings(sandboxHome)
 
         // Base minimal environment for the sandbox
-        sandboxEnv = mutableMapOf(
+        sandboxEnv = mapOf(
             "DISPLAY" to display,
             "DBUS_SESSION_BUS_ADDRESS" to dbusAddress,
-            "HOME" to (System.getenv("HOME") ?: "/tmp"),
+            "HOME" to sandboxHome.absolutePath,
+            "XDG_CONFIG_HOME" to File(sandboxHome, ".config").absolutePath,
+            "GTK_THEME" to "Adwaita",
+            "GSETTINGS_BACKEND" to "memory", // ignore any ambient dconf database entirely
+            "LC_ALL" to "C.UTF-8",
             "PATH" to (System.getenv("PATH") ?: "/usr/bin:/bin")
         )
-        System.getenv("USER")?.let { (sandboxEnv as MutableMap)["USER"] = it }
 
         // 3. Start AT-SPI2
-        val pbAtSpi = ProcessBuilder("/usr/libexec/at-spi-bus-launcher", "--launch-immediately")
-        pbAtSpi.environment().clear()
-        pbAtSpi.environment().putAll(sandboxEnv!!)
-        atSpiProc = pbAtSpi.start()
+        atSpiProc = startTracked(listOf("/usr/libexec/at-spi-bus-launcher", "--launch-immediately")) { pb ->
+            pb.environment().clear()
+            pb.environment().putAll(sandboxEnv!!)
+        }
         Thread.sleep(1000)
 
         // 4. Start Worker
         val workerJar = Paths.get("worker/target/screenshotter-worker-0.1.0-SNAPSHOT-jar-with-dependencies.jar").toAbsolutePath().toString()
-        val pbWorker = ProcessBuilder("java", "-Djava.awt.headless=false", "-jar", workerJar, "0")
-        
-        // Use strictly isolated environment
-        pbWorker.environment().clear()
-        pbWorker.environment().putAll(sandboxEnv!!)
-        
-        // We will read worker's stderr to find out what port it started on
-        pbWorker.redirectErrorStream(true)
-        workerProc = pbWorker.start()
-        
+        workerProc = startTracked(listOf("java", "-Djava.awt.headless=false", "-jar", workerJar, "0")) { pb ->
+            // Use strictly isolated environment
+            pb.environment().clear()
+            pb.environment().putAll(sandboxEnv!!)
+            // We will read worker's stderr to find out what port it started on
+            pb.redirectErrorStream(true)
+        }
+
         val workerOut = BufferedReader(InputStreamReader(workerProc!!.inputStream, "UTF-8"))
         var portFound = false
         // Read lines until we find the port
@@ -104,11 +125,11 @@ class SandboxManager {
                 break
             }
         }
-        
+
         if (!portFound) {
             throw RuntimeException("Failed to read HTTP port from worker process.")
         }
-        
+
         // Start a thread to keep dumping worker logs to stderr
         Thread {
             try {
@@ -118,22 +139,72 @@ class SandboxManager {
                 }
             } catch (ignored: Exception) {}
         }.start()
-        
-        // Ensure cleanup on shutdown
+
+        // Ensure cleanup on graceful shutdown (Ctrl-C, normal exit, ...)
         Runtime.getRuntime().addShutdownHook(Thread { stop() })
     }
-    
+
+    /** A fixed, built-in GTK theme/font/icon set, so widget layout and text metrics are the same on every machine. */
+    private fun writeGtkSettings(home: File) {
+        val gtkConfigDir = File(home, ".config/gtk-3.0")
+        gtkConfigDir.mkdirs()
+        File(gtkConfigDir, "settings.ini").writeText(
+            """
+            [Settings]
+            gtk-theme-name=Adwaita
+            gtk-icon-theme-name=Adwaita
+            gtk-cursor-theme-name=Adwaita
+            gtk-font-name=DejaVu Sans 10
+            """.trimIndent() + "\n"
+        )
+    }
+
+    /**
+     * Starts `command` inside its own `setsid` session - so it (and anything it spawns) becomes
+     * one process group whose pgid equals its own pid - and records that pgid in
+     * `pgidRegistryFile`, so both stop() and the crash-only watchdog can reap it uniformly.
+     */
+    private fun startTracked(command: List<String>, configure: (ProcessBuilder) -> Unit = {}): Process {
+        val pb = ProcessBuilder(listOf("setsid") + command)
+        configure(pb)
+        val proc = pb.start()
+        pgidRegistryFile.appendText("${proc.pid()}\n")
+        return proc
+    }
+
+    /**
+     * Spawns a tiny shell watchdog whose only job is to notice that *we* have died - for any
+     * reason, including `kill -9`, an OOM-kill, or a native crash in JNA/X11 code that never
+     * reaches stop()'s shutdown hook - and reap every tracked process group even then.
+     *
+     * The trick: the watchdog blocks reading its own stdin, which is a pipe whose write end we
+     * (the JVM) hold open for our entire lifetime and never write to or close ourselves. The
+     * moment we die, for any reason, the kernel closes every file descriptor we held - including
+     * that pipe's write end - as part of normal process teardown, no cooperation from us
+     * required. The watchdog's read() then returns EOF, and it cleans up on its own.
+     */
+    private fun startWatchdog() {
+        val script = """
+            cat >/dev/null
+            while IFS= read -r pgid; do
+                [ -n "${'$'}pgid" ] && kill -TERM -"${'$'}pgid" 2>/dev/null
+            done < "${pgidRegistryFile.absolutePath}"
+            rm -rf "${pgidRegistryFile.absolutePath}" "${sandboxHome.absolutePath}"
+        """.trimIndent()
+        watchdogProc = ProcessBuilder("sh", "-c", script).start()
+    }
+
     fun sendCommand(command: Map<String, Any?>): Map<String, Any> {
         val reqJson = mapper.writeValueAsString(command)
-        
+
         val request = HttpRequest.newBuilder()
             .uri(URI.create("http://127.0.0.1:$workerPort/execute"))
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(reqJson))
             .build()
-            
+
         val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-        
+
         @Suppress("UNCHECKED_CAST")
         val resMap = mapper.readValue(response.body(), Map::class.java) as Map<String, Any>
         if (resMap["status"] == "error") {
@@ -141,20 +212,19 @@ class SandboxManager {
         }
         return resMap
     }
-    
+
     fun launchApp(command: String): Int {
-        // Same `setsid` treatment as D-Bus: the launched command (and any children it spawns)
-        // gets its own process group so stop() can tear the whole tree down, instead of
-        // leaking it the way plain ProcessBuilder.destroy() would (see FUTURE_WORK #8/#9).
-        val pb = ProcessBuilder("setsid", "sh", "-c", command)
-        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
-        pb.redirectError(ProcessBuilder.Redirect.INHERIT)
-        pb.environment().clear()
-        sandboxEnv?.let { pb.environment().putAll(it) }
-        val proc = pb.start()
-        val pgid = proc.pid().toInt()
-        launchedAppPgids.add(pgid)
-        return pgid
+        // Same tracked-group treatment as the sandbox's own services: the launched command (and
+        // any children it spawns) gets its own process group so stop()/the watchdog can tear the
+        // whole tree down, instead of leaking it the way plain ProcessBuilder.destroy() would
+        // (see FUTURE_WORK #8/#9).
+        val proc = startTracked(listOf("sh", "-c", command)) { pb ->
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT)
+            pb.environment().clear()
+            sandboxEnv?.let { pb.environment().putAll(it) }
+        }
+        return proc.pid().toInt()
     }
 
     /** Sends `signal` to every process in `pgid` at once (negative PID = process group, see kill(2)). */
@@ -167,7 +237,7 @@ class SandboxManager {
 
     private fun findFreeDisplay(): Int {
         for (i in 1..99) {
-            if (!java.io.File("/tmp/.X11-unix/X$i").exists()) {
+            if (!File("/tmp/.X11-unix/X$i").exists()) {
                 return i
             }
         }
@@ -175,12 +245,16 @@ class SandboxManager {
     }
 
     fun stop() {
-        launchedAppPgids.forEach { killProcessGroup(it) }
-        killProcessGroup(dbusPgid)
-        dbusProc?.destroy() // belt-and-suspenders in case the group kill above missed it
+        if (pgidRegistryFile.exists()) {
+            pgidRegistryFile.readLines().mapNotNull { it.trim().toIntOrNull() }.forEach { killProcessGroup(it) }
+        }
         workerProc?.destroy()
         atSpiProc?.destroy()
         xephyrProc?.destroy()
+        dbusProc?.destroy() // belt-and-suspenders in case the group kill above missed it
+        watchdogProc?.destroy() // we're exiting cleanly ourselves, no need for its crash safety net
+        pgidRegistryFile.delete()
+        sandboxHome.deleteRecursively()
     }
 }
 
