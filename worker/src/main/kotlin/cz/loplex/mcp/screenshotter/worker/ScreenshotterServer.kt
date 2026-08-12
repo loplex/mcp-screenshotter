@@ -227,18 +227,28 @@ class ScreenshotterServer(
     }
 
     /**
-     * Uses native X11 emulation (via Robot) to move the mouse and optionally click.
+     * Uses native X11 emulation (via Robot) to move the mouse and optionally click, press,
+     * release, or scroll the wheel. "press" and "release" are separate calls on purpose:
+     * the X server tracks button state independently of our Robot instance, so a "press" at
+     * one point followed by a plain "move" to another point (button still held) followed by
+     * a "release" there produces a genuine drag - e.g. for dragging a GtkPaned splitter.
      */
-    fun mouseAction(action: String, x: Int, y: Int, button: Int = 1) {
+    fun mouseAction(action: String, x: Int, y: Int, amount: Int = 0, button: Int = 1) {
         robot.mouseMove(x, y)
-        if (action == "click") {
-            val mask = when (button) {
-                1 -> java.awt.event.InputEvent.BUTTON1_DOWN_MASK
-                3 -> java.awt.event.InputEvent.BUTTON3_DOWN_MASK
-                else -> java.awt.event.InputEvent.BUTTON1_DOWN_MASK
+        val mask = when (button) {
+            1 -> java.awt.event.InputEvent.BUTTON1_DOWN_MASK
+            3 -> java.awt.event.InputEvent.BUTTON3_DOWN_MASK
+            else -> java.awt.event.InputEvent.BUTTON1_DOWN_MASK
+        }
+        when (action) {
+            "click" -> {
+                robot.mousePress(mask)
+                robot.mouseRelease(mask)
             }
-            robot.mousePress(mask)
-            robot.mouseRelease(mask)
+            "press" -> robot.mousePress(mask)
+            "release" -> robot.mouseRelease(mask)
+            "scroll" -> robot.mouseWheel(amount)
+            else -> { /* "move" (default): mouseMove above already covers it */ }
         }
     }
 

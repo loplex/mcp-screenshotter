@@ -66,7 +66,8 @@ fun main(args: Array<String>) {
                         val mouseAction = request["mouseAction"] as? String ?: "move"
                         val mx = (request["x"] as? Number)?.toInt() ?: 0
                         val my = (request["y"] as? Number)?.toInt() ?: 0
-                        serverLogic.mouseAction(mouseAction, mx, my)
+                        val amount = (request["amount"] as? Number)?.toInt() ?: 0
+                        serverLogic.mouseAction(mouseAction, mx, my, amount)
                     }
                     "resizeWindow" -> {
                         val rw = (request["width"] as? Number)?.toInt() ?: 1024

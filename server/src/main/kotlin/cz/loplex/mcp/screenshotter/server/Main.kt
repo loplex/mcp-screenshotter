@@ -209,14 +209,18 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                 ),
                 ToolInfo(
                     name = "mouse_action",
-                    description = "Performs a mouse action at the given coordinates.",
+                    description = "Performs a mouse action at the given coordinates. Supported actions: " +
+                        "'move', 'click', 'press' and 'release' (pair these two around intermediate 'move' " +
+                        "calls to perform a drag, e.g. to resize a split pane), and 'scroll' (uses 'amount' " +
+                        "as the number of wheel notches; positive scrolls down, negative scrolls up).",
                     inputSchema = mapOf(
                         "type" to "object",
                         "required" to listOf("action", "x", "y"),
                         "properties" to mapOf(
                             "action" to mapOf("type" to "string"),
                             "x" to mapOf("type" to "integer"),
-                            "y" to mapOf("type" to "integer")
+                            "y" to mapOf("type" to "integer"),
+                            "amount" to mapOf("type" to "integer", "description" to "Wheel notches for the 'scroll' action.")
                         )
                     )
                 ),
@@ -328,7 +332,8 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                         "action" to "mouseAction",
                         "mouseAction" to (arguments?.get("action") as? String ?: "move"),
                         "x" to ((arguments?.get("x") as? Number)?.toInt() ?: 0),
-                        "y" to ((arguments?.get("y") as? Number)?.toInt() ?: 0)
+                        "y" to ((arguments?.get("y") as? Number)?.toInt() ?: 0),
+                        "amount" to ((arguments?.get("amount") as? Number)?.toInt() ?: 0)
                     ))
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Mouse action executed.")))
                 } else if (name == "resize_window") {
