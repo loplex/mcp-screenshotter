@@ -21,8 +21,34 @@ data class ToolResult(val content: List<Map<String, Any>>, val isError: Boolean 
 /** A single directory the client explicitly wants visible inside the sandbox; everything else under HOME stays hidden. */
 data class Mount(val hostPath: String, val sandboxPath: String = hostPath, val readOnly: Boolean = true)
 
+/**
+ * Which nested X server backs the sandbox display.
+ *  - [XEPHYR] renders into a window on a *host* X server, so it needs one already running (e.g.
+ *    a real desktop session) to attach to - but that window is handy for a human to peek at while
+ *    debugging a test locally.
+ *  - [XVFB] is fully virtual and needs no host display at all, which is what makes it work on a
+ *    headless CI box or a bare SSH session where Xephyr has nothing to attach to.
+ */
+enum class DisplayBackend(val processName: String) {
+    XEPHYR("Xephyr"),
+    XVFB("Xvfb");
+
+    companion object {
+        /** Selected via SCREENSHOTTER_DISPLAY_BACKEND (case-insensitive); defaults to Xephyr, matching prior behavior. */
+        fun fromEnv(env: Map<String, String> = System.getenv()): DisplayBackend {
+            val raw = env["SCREENSHOTTER_DISPLAY_BACKEND"]?.trim()
+            if (raw.isNullOrEmpty()) return XEPHYR
+            return entries.find { it.name.equals(raw, ignoreCase = true) }
+                ?: throw IllegalArgumentException(
+                    "Unknown SCREENSHOTTER_DISPLAY_BACKEND '$raw'; expected one of ${entries.joinToString(", ") { it.name }}."
+                )
+        }
+    }
+}
+
 class SandboxManager {
-    private var xephyrProc: Process? = null
+    private var displayProc: Process? = null
+    private var vncProc: Process? = null
     private var dbusProc: Process? = null
     private var atSpiProc: Process? = null
     private var workerProc: Process? = null
@@ -50,13 +76,31 @@ class SandboxManager {
         // see startWatchdog() for how it detects our death and why.
         startWatchdog()
 
-        // 1. Start Xephyr
+        // 1. Start the display server (Xephyr or Xvfb, per SCREENSHOTTER_DISPLAY_BACKEND)
+        val backend = DisplayBackend.fromEnv()
         val displayNum = findFreeDisplay()
         val display = ":$displayNum"
-        xephyrProc = startTracked(listOf("Xephyr", "-screen", "1024x768", display))
+        displayProc = startTracked(displayCommand(backend, display))
         Thread.sleep(1000) // Wait for X11 to initialize
 
-        System.err.println("Xephyr started on $display")
+        System.err.println("${backend.processName} started on $display")
+
+        // Optional: mirror the sandbox display over VNC, e.g. so a human can watch/interact with
+        // an otherwise-headless Xvfb display. Whether the sandbox ends up visible to anyone at
+        // all is entirely up to whoever runs the server - Xephyr already opens a plain window if
+        // a host display is present, and this is the equivalent knob for the case where it isn't.
+        // Off by default: it opens a network-facing (albeit loopback-only) port, so it should be
+        // an explicit opt-in, not silently on.
+        vncPortFromEnv()?.let { port ->
+            vncProc = startTracked(listOf(
+                "x11vnc", "-display", display, "-rfbport", port.toString(),
+                "-localhost", "-forever", "-shared", "-noxdamage", "-nopw"
+            ))
+            System.err.println(
+                "VNC mirror listening on 127.0.0.1:$port ($display) - loopback-only; " +
+                    "use an SSH tunnel or your own port-forward for remote viewing."
+            )
+        }
 
         // 2. Start D-Bus
         // Deliberately run in the foreground (--nofork): this keeps a live Process handle
@@ -145,6 +189,20 @@ class SandboxManager {
 
         // Ensure cleanup on graceful shutdown (Ctrl-C, normal exit, ...)
         Runtime.getRuntime().addShutdownHook(Thread { stop() })
+    }
+
+    /** Selected via SCREENSHOTTER_VNC_PORT; null (the default) means no VNC mirror is started at all. */
+    private fun vncPortFromEnv(env: Map<String, String> = System.getenv()): Int? {
+        val raw = env["SCREENSHOTTER_VNC_PORT"]?.trim()
+        if (raw.isNullOrEmpty()) return null
+        return raw.toIntOrNull()
+            ?: throw IllegalArgumentException("SCREENSHOTTER_VNC_PORT must be a port number, got '$raw'.")
+    }
+
+    /** Builds the launch command for `backend`; both take the same 1024x768 resolution, just in their own flag syntax. */
+    private fun displayCommand(backend: DisplayBackend, display: String): List<String> = when (backend) {
+        DisplayBackend.XEPHYR -> listOf("Xephyr", "-screen", "1024x768", display)
+        DisplayBackend.XVFB -> listOf("Xvfb", display, "-screen", "0", "1024x768x24")
     }
 
     /** A fixed, built-in GTK theme/font/icon set, so widget layout and text metrics are the same on every machine. */
@@ -260,7 +318,7 @@ class SandboxManager {
             "--ro-bind", "/", "/",
             "--dev", "/dev",
             "--proc", "/proc",
-            "--bind", "/tmp", "/tmp", // Xephyr's and dbus-daemon's unix sockets live under here
+            "--bind", "/tmp", "/tmp", // the display server's and dbus-daemon's unix sockets live under here
             "--tmpfs", realHome, // hide the real user's HOME entirely, regardless of $HOME env var
             "--bind", sandboxHome.absolutePath, sandboxHome.absolutePath, // our own HOME stays writable
             "--ro-bind", serverCwd, serverCwd
@@ -297,7 +355,8 @@ class SandboxManager {
         }
         workerProc?.destroy()
         atSpiProc?.destroy()
-        xephyrProc?.destroy()
+        vncProc?.destroy()
+        displayProc?.destroy()
         dbusProc?.destroy() // belt-and-suspenders in case the group kill above missed it
         watchdogProc?.destroy() // we're exiting cleanly ourselves, no need for its crash safety net
         pgidRegistryFile.delete()
