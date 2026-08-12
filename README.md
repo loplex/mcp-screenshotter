@@ -45,12 +45,13 @@ MCP Screenshotter allows an AI (like Claude) to safely run, observe, and interac
 - **Xephyr** (`xserver-xephyr`)
 - **D-Bus** (`dbus-x11`)
 - **AT-SPI2** (`at-spi2-core`)
+- **Bubblewrap** (`bubblewrap`) - used by `launch_app` to sandbox the launched command's mount namespace
 - **Python 3**, **PyGObject** (`python3-gi`) & **GTK 3** (`gir1.2-gtk-3.0`) - for running the E2E test app's sample GTK application
 
 On Debian/Ubuntu:
 ```bash
 sudo apt update
-sudo apt install xserver-xephyr dbus-x11 at-spi2-core python3-gi gir1.2-gtk-3.0
+sudo apt install xserver-xephyr dbus-x11 at-spi2-core bubblewrap python3-gi gir1.2-gtk-3.0
 ```
 
 ## Build and Run

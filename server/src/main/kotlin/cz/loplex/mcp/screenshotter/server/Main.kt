@@ -18,6 +18,9 @@ data class ToolInfo(val name: String, val description: String, val inputSchema: 
 data class InitResult(val protocolVersion: String, val capabilities: Map<String, Any>, val serverInfo: Map<String, Any>)
 data class ToolResult(val content: List<Map<String, Any>>, val isError: Boolean = false)
 
+/** A single directory the client explicitly wants visible inside the sandbox; everything else under HOME stays hidden. */
+data class Mount(val hostPath: String, val sandboxPath: String = hostPath, val readOnly: Boolean = true)
+
 class SandboxManager {
     private var xephyrProc: Process? = null
     private var dbusProc: Process? = null
@@ -184,12 +187,21 @@ class SandboxManager {
      * required. The watchdog's read() then returns EOF, and it cleans up on its own.
      */
     private fun startWatchdog() {
+        // Same safety limit as safeDeleteRecursively(): only remove sandboxHome if it still looks
+        // like the handful of files we ourselves wrote there, not blindly `rm -rf` whatever is at
+        // that path by the time we crash.
         val script = """
             cat >/dev/null
             while IFS= read -r pgid; do
                 [ -n "${'$'}pgid" ] && kill -TERM -"${'$'}pgid" 2>/dev/null
             done < "${pgidRegistryFile.absolutePath}"
-            rm -rf "${pgidRegistryFile.absolutePath}" "${sandboxHome.absolutePath}"
+            rm -f "${pgidRegistryFile.absolutePath}"
+            entries="${'$'}(find "${sandboxHome.absolutePath}" 2>/dev/null | wc -l)"
+            if [ "${'$'}entries" -le 100 ]; then
+                rm -rf "${sandboxHome.absolutePath}"
+            else
+                echo "Refusing to delete ${sandboxHome.absolutePath}: it contains ${'$'}entries entries (> 100 safety limit)." >&2
+            fi
         """.trimIndent()
         watchdogProc = ProcessBuilder("sh", "-c", script).start()
     }
@@ -213,18 +225,53 @@ class SandboxManager {
         return resMap
     }
 
-    fun launchApp(command: String): Int {
+    fun launchApp(command: String, mounts: List<Mount> = emptyList()): Int {
         // Same tracked-group treatment as the sandbox's own services: the launched command (and
         // any children it spawns) gets its own process group so stop()/the watchdog can tear the
         // whole tree down, instead of leaking it the way plain ProcessBuilder.destroy() would
         // (see FUTURE_WORK #8/#9).
-        val proc = startTracked(listOf("sh", "-c", command)) { pb ->
+        val proc = startTracked(bwrapCommand(command, mounts)) { pb ->
             pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
             pb.redirectError(ProcessBuilder.Redirect.INHERIT)
             pb.environment().clear()
             sandboxEnv?.let { pb.environment().putAll(it) }
         }
         return proc.pid().toInt()
+    }
+
+    /**
+     * Wraps `command` in a `bwrap` (bubblewrap) mount namespace so the launched app can't see the
+     * *real* HOME directory at all - not even by bypassing the HOME env var and going straight to
+     * getpwuid()'s reported home dir - only whatever `mounts` the caller explicitly asked for.
+     * The rest of the filesystem (libs, binaries, /tmp for the X11/D-Bus sockets) stays available
+     * read-only so the app can actually run; only the real HOME is shadowed, and only our own
+     * synthetic sandboxHome (holding the pinned GTK settings) is writable on top of that.
+     */
+    private fun bwrapCommand(command: String, mounts: List<Mount>): List<String> {
+        val realHome = System.getenv("HOME") ?: "/tmp"
+        // The server's own working directory (this repo, typically) is very often *under* the
+        // real HOME (e.g. ~/projects/foo) and launch_app commands routinely reference it via
+        // relative paths (see e2e/test_gui.py's own `python3 e2e/sample_app.py`), so blanket-
+        // hiding HOME would take that out from under them too. Explicitly re-expose just this one
+        // directory - not the rest of HOME - on top of the tmpfs shadow below.
+        val serverCwd = File(System.getProperty("user.dir")).absolutePath
+        val args = mutableListOf(
+            "bwrap",
+            "--ro-bind", "/", "/",
+            "--dev", "/dev",
+            "--proc", "/proc",
+            "--bind", "/tmp", "/tmp", // Xephyr's and dbus-daemon's unix sockets live under here
+            "--tmpfs", realHome, // hide the real user's HOME entirely, regardless of $HOME env var
+            "--bind", sandboxHome.absolutePath, sandboxHome.absolutePath, // our own HOME stays writable
+            "--ro-bind", serverCwd, serverCwd
+        )
+        for (mount in mounts) {
+            args += if (mount.readOnly) "--ro-bind" else "--bind"
+            args += mount.hostPath
+            args += mount.sandboxPath
+        }
+        args += listOf("--", "sh", "-c", command)
+        return args
     }
 
     /** Sends `signal` to every process in `pgid` at once (negative PID = process group, see kill(2)). */
@@ -254,7 +301,28 @@ class SandboxManager {
         dbusProc?.destroy() // belt-and-suspenders in case the group kill above missed it
         watchdogProc?.destroy() // we're exiting cleanly ourselves, no need for its crash safety net
         pgidRegistryFile.delete()
-        sandboxHome.deleteRecursively()
+        safeDeleteRecursively(sandboxHome)
+    }
+
+    /**
+     * Recursively deletes `dir`, but refuses - logging an error and deleting nothing - if it
+     * contains more than `maxEntries` files/directories. `sandboxHome` should only ever hold the
+     * handful of files we ourselves wrote (settings.ini, maybe a GTK cache dir), so a count this
+     * high means something unexpected is going on (e.g. a future bug pointing this at the wrong
+     * path) and blind recursive deletion is the wrong response to that.
+     */
+    private fun safeDeleteRecursively(dir: File, maxEntries: Int = 100) {
+        if (!dir.exists()) return
+        val entries = dir.walkTopDown().count()
+        if (entries > maxEntries) {
+            System.err.println(
+                "Refusing to delete $dir: it contains $entries entries (> $maxEntries safety limit), " +
+                    "which is far more than the sandbox itself ever writes there. Leaving it in place - " +
+                    "please inspect and remove it manually."
+            )
+            return
+        }
+        dir.deleteRecursively()
     }
 }
 
@@ -385,11 +453,26 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                 ),
                 ToolInfo(
                     name = "launch_app",
-                    description = "Launches an application inside the isolated GUI environment.",
+                    description = "Launches an application inside the isolated GUI environment. The app runs in its " +
+                        "own mount namespace with an empty HOME - it cannot see the real user's files at all, even " +
+                        "by bypassing the HOME env var - unless you explicitly expose a directory via 'mounts'.",
                     inputSchema = mapOf(
                         "type" to "object",
                         "properties" to mapOf(
-                            "command" to mapOf("type" to "string", "description" to "The shell command to execute, e.g., 'java -cp e2e SampleApp'.")
+                            "command" to mapOf("type" to "string", "description" to "The shell command to execute, e.g., 'java -cp e2e SampleApp'."),
+                            "mounts" to mapOf(
+                                "type" to "array",
+                                "description" to "Host directories to make visible inside the sandbox. Everything else under HOME stays hidden.",
+                                "items" to mapOf(
+                                    "type" to "object",
+                                    "required" to listOf("host_path"),
+                                    "properties" to mapOf(
+                                        "host_path" to mapOf("type" to "string", "description" to "Absolute path on the real filesystem."),
+                                        "sandbox_path" to mapOf("type" to "string", "description" to "Path it appears at inside the sandbox. Defaults to host_path."),
+                                        "read_only" to mapOf("type" to "boolean", "description" to "Defaults to true.")
+                                    )
+                                )
+                            )
                         ),
                         "required" to listOf("command")
                     )
@@ -485,9 +568,18 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                     if (command.isBlank()) {
                         ToolResult(content = listOf(mapOf("type" to "text", "text" to "Error: Command cannot be empty.")), isError = true)
                     } else {
-                        val pid = sandbox.launchApp(command)
+                        @Suppress("UNCHECKED_CAST")
+                        val mounts = (arguments?.get("mounts") as? List<Map<String, Any>> ?: emptyList()).map { m ->
+                            val hostPath = m["host_path"] as String
+                            Mount(
+                                hostPath = hostPath,
+                                sandboxPath = (m["sandbox_path"] as? String) ?: hostPath,
+                                readOnly = (m["read_only"] as? Boolean) ?: true
+                            )
+                        }
+                        val pid = sandbox.launchApp(command, mounts)
                         ToolResult(content = listOf(mapOf(
-                            "type" to "text", 
+                            "type" to "text",
                             "text" to "Application launched successfully with PID $pid inside the sandbox."
                         )))
                     }
