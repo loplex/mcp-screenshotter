@@ -19,9 +19,11 @@ data class ToolResult(val content: List<Map<String, Any>>, val isError: Boolean 
 class SandboxManager {
     private var xephyrProc: Process? = null
     private var dbusProc: Process? = null
+    private var dbusPgid: Int = -1
     private var atSpiProc: Process? = null
     private var workerProc: Process? = null
-    
+    private val launchedAppPgids = mutableListOf<Int>()
+
     private var workerPort: Int = -1
     private val mapper = jacksonObjectMapper()
     private val httpClient = HttpClient.newHttpClient()
@@ -39,11 +41,28 @@ class SandboxManager {
         System.err.println("Xephyr started on $display")
 
         // 2. Start D-Bus
-        val dbusOutput = ProcessBuilder("dbus-daemon", "--session", "--print-address=1", "--print-pid=1", "--fork")
-            .start().inputStream.bufferedReader().readText().trim().split("\n")
-        val dbusAddress = dbusOutput[0]
-        
-        System.err.println("D-Bus started at $dbusAddress")
+        // Deliberately run in the foreground (--nofork) inside its own `setsid` session: this
+        // keeps a live Process handle instead of letting the daemon fork-and-detach into a PID
+        // we never captured (the leak described in FUTURE_WORK #9), and the `setsid` group lets
+        // stop() reap it - and any D-Bus-activated helper it spawns - as a single unit via
+        // killProcessGroup(), instead of leaving them orphaned.
+        val pbDbus = ProcessBuilder("setsid", "dbus-daemon", "--session", "--print-address=1", "--nofork")
+        pbDbus.redirectErrorStream(true)
+        dbusProc = pbDbus.start()
+        dbusPgid = dbusProc!!.pid().toInt()
+
+        val dbusOut = BufferedReader(InputStreamReader(dbusProc!!.inputStream, "UTF-8"))
+        val dbusAddress = dbusOut.readLine()?.trim()
+            ?: throw RuntimeException("Failed to read D-Bus address from dbus-daemon.")
+
+        // Keep draining the rest of its output so the pipe never fills up and blocks the daemon
+        Thread {
+            try {
+                while (dbusOut.readLine() != null) { /* discard */ }
+            } catch (ignored: Exception) {}
+        }.start()
+
+        System.err.println("D-Bus started at $dbusAddress (pgid=$dbusPgid)")
 
         // Base minimal environment for the sandbox
         sandboxEnv = mutableMapOf(
@@ -124,13 +143,26 @@ class SandboxManager {
     }
     
     fun launchApp(command: String): Int {
-        val pb = ProcessBuilder("sh", "-c", command)
+        // Same `setsid` treatment as D-Bus: the launched command (and any children it spawns)
+        // gets its own process group so stop() can tear the whole tree down, instead of
+        // leaking it the way plain ProcessBuilder.destroy() would (see FUTURE_WORK #8/#9).
+        val pb = ProcessBuilder("setsid", "sh", "-c", command)
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
         pb.redirectError(ProcessBuilder.Redirect.INHERIT)
         pb.environment().clear()
         sandboxEnv?.let { pb.environment().putAll(it) }
         val proc = pb.start()
-        return proc.pid().toInt()
+        val pgid = proc.pid().toInt()
+        launchedAppPgids.add(pgid)
+        return pgid
+    }
+
+    /** Sends `signal` to every process in `pgid` at once (negative PID = process group, see kill(2)). */
+    private fun killProcessGroup(pgid: Int, signal: String = "TERM") {
+        if (pgid <= 0) return
+        try {
+            ProcessBuilder("kill", "-$signal", "-$pgid").start().waitFor()
+        } catch (ignored: Exception) {}
     }
 
     private fun findFreeDisplay(): Int {
@@ -143,6 +175,9 @@ class SandboxManager {
     }
 
     fun stop() {
+        launchedAppPgids.forEach { killProcessGroup(it) }
+        killProcessGroup(dbusPgid)
+        dbusProc?.destroy() // belt-and-suspenders in case the group kill above missed it
         workerProc?.destroy()
         atSpiProc?.destroy()
         xephyrProc?.destroy()

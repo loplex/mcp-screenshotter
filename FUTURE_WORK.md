@@ -31,6 +31,20 @@ This document serves to track ideas and future improvements for the MCP server t
 - **Feature:** Natively resize windows in X11 using JNA without relying on external processes like `xdotool` or a heavy Window Manager.
 *(Implemented via JNA `XResizeWindow`)*
 
-## 7. Isolated App Launcher (Self-Managed Environment)
+## 7. ~~Isolated App Launcher (Self-Managed Environment)~~ **[DONE]**
 - **Feature:** Allow the MCP server to directly spawn target applications within a controlled, isolated environment (e.g., automatically starting Xephyr and its own `dbus-run-session` for AT-SPI2).
 - **Usage:** Instead of the user or testing script setting up the X11 display, the LLM agent could call a `launch_app` tool (e.g., `launch_app("java SampleApp")`), and the server would fully containerize the GUI session.
+*(Implemented via `SandboxManager` in `Main.kt`, which auto-starts Xephyr, an isolated `dbus-daemon` session, and `at-spi-bus-launcher` before exposing the `launch_app` MCP tool; verified end-to-end via `e2e/test_gui.py`)*
+
+## 8. Multi-App / Multi-Window Session Management
+- **Problem:** `launch_app` fires processes into the sandbox but the server has no notion of "which window belongs to which launched app." With multiple apps open, tools like `get_ui_tree`, `resize_window`, and `get_screenshot` implicitly operate on "the active window" or the whole display, which gets ambiguous fast.
+- **Solution:** Track PIDs returned by `launch_app` and let tools optionally scope by window/PID (e.g., via `_NET_WM_PID` lookup through JNA/X11), plus add a `list_windows` tool and a `close_app`/`kill_app` tool for session cleanup.
+
+## 9. ~~Sandbox Lifecycle & Resource Cleanup Hardening~~ **[PARTIALLY DONE]**
+- **Problem:** `SandboxManager.stop()` destroys `workerProc`, `atSpiProc`, and `xephyrProc`, but not the `dbus-daemon` process (only its address is captured, not its handle) and not any processes started via `launch_app`. Orphaned Xephyr/D-Bus/app processes can accumulate across repeated runs or crashes.
+- **Solution:** Track the `dbus-daemon` PID (it's printed via `--print-pid=1`) and terminate it on `stop()`; track PIDs from `launchApp()` and terminate them (or their process group) on shutdown too. Consider wrapping the whole sandbox in a cgroup or process group for atomic teardown.
+*(D-Bus and `launch_app` fixed: both now run via `setsid` in their own process group - dbus-daemon in the foreground with `--nofork` instead of `--fork`-and-detach - so `stop()` can `kill -TERM` the whole group via `killProcessGroup()`, catching any children they spawn too. Xephyr/AT-SPI/worker still only use plain `Process.destroy()`, and a real cgroup covering the entire sandbox as one atomic unit is still open.)*
+
+## 10. Configurable Sandbox Parameters
+- **Problem:** Screen resolution (`1024x768`), worker jar path, and display search range are currently hardcoded in `Main.kt`.
+- **Solution:** Expose these via environment variables or MCP server startup arguments (e.g., `SCREENSHOTTER_RESOLUTION`, `SCREENSHOTTER_WORKER_JAR`), so the same server binary can be reused across differently-sized target apps/CI environments without a rebuild.
