@@ -439,7 +439,13 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                             "width" to mapOf("type" to "integer"),
                             "height" to mapOf("type" to "integer"),
                             "include_deltas" to mapOf("type" to "boolean"),
-                            "threshold" to mapOf("type" to "number")
+                            "threshold" to mapOf("type" to "number"),
+                            "max_width" to mapOf(
+                                "type" to "integer",
+                                "description" to "Downscale the returned image to at most this many pixels wide " +
+                                    "(aspect ratio preserved) to cut vision-token cost when full detail isn't " +
+                                    "needed. Omit for full resolution."
+                            )
                         )
                     )
                 ),
@@ -501,7 +507,13 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                             "x" to mapOf("type" to "integer"),
                             "y" to mapOf("type" to "integer"),
                             "width" to mapOf("type" to "integer"),
-                            "height" to mapOf("type" to "integer")
+                            "height" to mapOf("type" to "integer"),
+                            "max_width" to mapOf(
+                                "type" to "integer",
+                                "description" to "Downscale the returned image to at most this many pixels wide " +
+                                    "(aspect ratio preserved) to cut vision-token cost when full detail isn't " +
+                                    "needed. Omit for full resolution."
+                            )
                         )
                     )
                 ),
@@ -551,6 +563,7 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                     }
                     // Map snake_case to camelCase
                     if (req.containsKey("include_deltas")) req["includeDeltas"] = req.remove("include_deltas")
+                    if (req.containsKey("max_width")) req["maxWidth"] = req.remove("max_width")
                     
                     val res = sandbox.sendCommand(req)
                     
@@ -609,7 +622,8 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                         "x" to ((arguments?.get("x") as? Number)?.toInt() ?: 0),
                         "y" to ((arguments?.get("y") as? Number)?.toInt() ?: 0),
                         "width" to ((arguments?.get("width") as? Number)?.toInt() ?: 100),
-                        "height" to ((arguments?.get("height") as? Number)?.toInt() ?: 100)
+                        "height" to ((arguments?.get("height") as? Number)?.toInt() ?: 100),
+                        "maxWidth" to (arguments?.get("max_width") as? Number)?.toInt()
                     ))
                     ToolResult(content = listOf(mapOf(
                         "type" to "image",

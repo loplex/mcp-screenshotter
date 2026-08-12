@@ -110,13 +110,13 @@ Requires `x11vnc` to be installed (see [Requirements](#requirements)).
 ## Available MCP Tools
 
 - `launch_app`: Execute a bash command inside the sandbox to start a GUI application.
-- `get_screenshot`: Returns a base64 encoded PNG. Can return only bounding boxes of changed areas if `threshold` and `include_deltas` are used.
+- `get_screenshot`: Returns a base64 encoded PNG. Can return only bounding boxes of changed areas if `threshold` and `include_deltas` are used. `max_width` downscales the returned image (aspect ratio preserved) to cut vision-token cost - the underlying delta comparisons stay full-resolution regardless.
 - `get_ui_tree`: Returns a structured JSON representation of the active window's UI elements via AT-SPI2.
 - `detect_ui_elements`: Fallback tool that uses OpenCV edge detection to find rectangular UI components.
 - `mouse_action`: Move, click, double-click, or drag at specific X, Y coordinates.
 - `get_clipboard` / `set_clipboard`: Interact with the sandbox clipboard.
 - `resize_window`: Resizes all top-level windows in the sandbox display.
-- `highlight_area`: Returns a screenshot with a red bounding box drawn over a specified area.
+- `highlight_area`: Returns a screenshot with a red bounding box drawn over a specified area. Also accepts `max_width`.
 
 ## Usage with Claude Desktop
 

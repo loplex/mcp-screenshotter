@@ -65,6 +65,11 @@ This document serves to track ideas and future improvements for the MCP server t
 - **Solution:** Optionally start `x11vnc` against the sandbox display, gated by `SCREENSHOTTER_VNC_PORT` (unset by default - no VNC mirror at all unless explicitly requested). Bound with `-localhost`, so it never listens beyond loopback on its own; reaching it from elsewhere requires an explicit tunnel/port-forward.
 *(Implemented in `SandboxManager.start()`/`vncPortFromEnv()`; the `x11vnc` process is `startTracked()` like every other sandbox process, so it's torn down by `stop()` and the crash watchdog the same way.)*
 
+## 14. ~~Client-Selectable Image Quality~~ **[DONE]**
+- **Problem:** `get_screenshot` and `highlight_area` always returned the full-resolution screen capture as a lossless PNG, even when the calling LLM only needed a rough look - wasting vision tokens on detail nobody asked for. Vision-model token cost scales with pixel dimensions, not file size/format, so a lossy-compression knob wouldn't have actually helped here.
+- **Solution:** Added an optional `max_width` parameter to both tools: downscales the *returned* image to at most that many pixels wide (aspect ratio preserved) via `ScreenshotterServer.scaleToMaxWidth()`. Applied only to the image handed back over MCP - the full-resolution capture is still what feeds `hasScreenChanged()`/`getChangedBoundingBoxes()`/`updateLastScreenshot()`, so delta comparisons stay pixel-exact no matter what resolution a given call asked to receive. Omit the parameter for the prior (full-resolution) behavior.
+*(Implemented in `ScreenshotterServer.scaleToMaxWidth()`, wired into `WorkerMain.kt`'s `takeScreenshot`/`highlightArea` actions and `Main.kt`'s `get_screenshot`/`highlight_area` tool schemas. Covered by `ScreenshotterServerTest`.)*
+
 ## Rejected Ideas
 
 ### Letting a `launch_app` process outlive the server (considered, rejected)

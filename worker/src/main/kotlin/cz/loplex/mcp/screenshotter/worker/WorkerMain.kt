@@ -35,6 +35,7 @@ fun main(args: Array<String>) {
                         val height = (request["height"] as? Number)?.toInt()
                         val threshold = (request["threshold"] as? Number)?.toDouble() ?: -1.0
                         val includeDeltas = request["includeDeltas"] as? Boolean ?: false
+                        val maxWidth = (request["maxWidth"] as? Number)?.toInt()
 
                         val cropRect = if (x != null && y != null && width != null && height != null) {
                             java.awt.Rectangle(x, y, width, height)
@@ -58,7 +59,7 @@ fun main(args: Array<String>) {
                         } else {
                             val finalImg = if (cropRect != null) serverLogic.takeScreenshot(cropRect) else fullImg
                             response["changed"] = true
-                            response["imageB64"] = serverLogic.imageToBase64(finalImg)
+                            response["imageB64"] = serverLogic.imageToBase64(serverLogic.scaleToMaxWidth(finalImg, maxWidth))
                             response["changedAreas"] = changedBoxes
                         }
                     }
@@ -88,8 +89,9 @@ fun main(args: Array<String>) {
                         val hy = (request["y"] as? Number)?.toInt() ?: 0
                         val hw = (request["width"] as? Number)?.toInt() ?: 100
                         val hh = (request["height"] as? Number)?.toInt() ?: 100
+                        val hMaxWidth = (request["maxWidth"] as? Number)?.toInt()
                         val img = serverLogic.takeScreenshotWithHighlight(hx, hy, hw, hh)
-                        response["imageB64"] = serverLogic.imageToBase64(img)
+                        response["imageB64"] = serverLogic.imageToBase64(serverLogic.scaleToMaxWidth(img, hMaxWidth))
                     }
                     "detectUiElements" -> {
                         val img = serverLogic.takeScreenshot()

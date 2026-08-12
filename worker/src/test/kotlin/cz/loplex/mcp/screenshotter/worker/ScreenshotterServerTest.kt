@@ -63,6 +63,28 @@ class ScreenshotterServerTest {
         assertEquals(16, box2.height)
     }
 
+    @Test
+    fun `test scaleToMaxWidth downscales preserving aspect ratio`() {
+        val server = ScreenshotterServer()
+        val img = createTestImage(200, 100, Color.WHITE)
+
+        val scaled = server.scaleToMaxWidth(img, 100)
+
+        assertEquals(100, scaled.width)
+        assertEquals(50, scaled.height, "Height should scale down proportionally with width")
+    }
+
+    @Test
+    fun `test scaleToMaxWidth leaves image untouched when not needed`() {
+        val server = ScreenshotterServer()
+        val img = createTestImage(200, 100, Color.WHITE)
+
+        assertEquals(img, server.scaleToMaxWidth(img, null), "null maxWidth means full resolution")
+        assertEquals(img, server.scaleToMaxWidth(img, 0), "non-positive maxWidth is ignored")
+        assertEquals(img, server.scaleToMaxWidth(img, 200), "maxWidth >= actual width is a no-op")
+        assertEquals(img, server.scaleToMaxWidth(img, 500), "maxWidth larger than the image never upscales")
+    }
+
     private fun createTestImage(width: Int, height: Int, color: Color): BufferedImage {
         val img = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
         val g = img.createGraphics()

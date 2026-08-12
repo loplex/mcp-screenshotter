@@ -179,6 +179,33 @@ class ScreenshotterServer(
     }
 
     /**
+     * Downscales `image` so its width is at most `maxWidth`, preserving aspect ratio. Lets a
+     * caller trade image detail for a cheaper vision payload - vision-model token cost scales
+     * with pixel dimensions, not file size/format, so this (not e.g. lossy compression) is the
+     * lever that actually reduces it.
+     *
+     * Intended for use only on the image actually handed back to the caller (see WorkerMain) -
+     * never pass the result into hasScreenChanged()/getChangedBoundingBoxes()/
+     * updateLastScreenshot(), so delta comparisons always stay pixel-exact regardless of what
+     * resolution a given call asked to receive.
+     */
+    fun scaleToMaxWidth(image: BufferedImage, maxWidth: Int?): BufferedImage {
+        if (maxWidth == null || maxWidth <= 0 || maxWidth >= image.width) return image
+
+        val scaledHeight = (image.height.toDouble() * maxWidth / image.width).toInt().coerceAtLeast(1)
+        val scaled = BufferedImage(maxWidth, scaledHeight, BufferedImage.TYPE_INT_ARGB)
+        val g2d = scaled.createGraphics()
+        try {
+            g2d.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+            g2d.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+            g2d.drawImage(image, 0, 0, maxWidth, scaledHeight, null)
+        } finally {
+            g2d.dispose()
+        }
+        return scaled
+    }
+
+    /**
      * Converts a BufferedImage to a base64 encoded PNG string.
      */
     fun imageToBase64(image: BufferedImage): String {
