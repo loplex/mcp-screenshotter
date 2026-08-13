@@ -92,6 +92,23 @@ Connect any VNC viewer to `127.0.0.1:5900` while the server is running. It's sta
 deliberate extra step (e.g. `ssh -L 5900:localhost:5900 host`), not something exposed by default.
 Requires `x11vnc` to be installed (see [Requirements](#requirements)).
 
+## Worker Memory Limits
+
+The worker JVM's heap is capped by default (`-Xmx512m`; override via `SCREENSHOTTER_WORKER_MAX_HEAP`,
+e.g. `SCREENSHOTTER_WORKER_MAX_HEAP=1g`). That only bounds the JVM heap though, not native memory
+allocated by libraries the worker loads via JNA (X11, AT-SPI, OpenCV) - so the worker process is also
+wrapped in `ulimit -v` (default `8192` MB of virtual address space; override via
+`SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB`), which bounds *any* single allocation, heap or native, at
+the kernel level.
+
+```bash
+SCREENSHOTTER_WORKER_MAX_HEAP=1g SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB=4096 java -jar server/target/screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar
+```
+
+For debugging `close_app`/shutdown targeting without any risk of an actual kill signal going
+somewhere unintended, set `SCREENSHOTTER_DRY_RUN_KILL` (any non-empty value) - every `kill`
+`SandboxManager` would otherwise run is logged to stderr instead of actually sent.
+
 ## Build and Run
 
 1. **Compile and Package:**
@@ -115,8 +132,10 @@ Requires `x11vnc` to be installed (see [Requirements](#requirements)).
 - `detect_ui_elements`: Fallback tool that uses OpenCV edge detection to find rectangular UI components.
 - `mouse_action`: Move, click, double-click, or drag at specific X, Y coordinates.
 - `get_clipboard` / `set_clipboard`: Interact with the sandbox clipboard.
-- `resize_window`: Resizes all top-level windows in the sandbox display.
+- `resize_window`: Resizes a window in the sandbox display. Pass `window_id` (from `list_windows`) to target one specific window; omit it to resize every top-level window.
 - `highlight_area`: Returns a screenshot with a red bounding box drawn over a specified area. Also accepts `max_width`.
+- `list_windows`: Lists every top-level window in the sandbox with its position/size and, when resolvable, the PID `launch_app` returned for the app it belongs to (`launched_pid`) and the command it was launched with.
+- `close_app`: Terminates an app previously started via `launch_app`, identified by the PID it returned. Only affects that one app.
 
 ## Usage with Claude Desktop
 

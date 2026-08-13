@@ -69,6 +69,12 @@ class SandboxManager {
     private val httpClient = HttpClient.newHttpClient()
     private var sandboxEnv: Map<String, String>? = null
 
+    // Maps a launch_app-returned PID (which, thanks to startTracked()'s `setsid`, is also that
+    // app's process *group* ID) to the command it was launched with. Lets list_windows() report
+    // which launched app a given window belongs to, and lets closeApp() refuse to touch a PID it
+    // didn't itself hand out - see FUTURE_WORK #8.
+    private val launchedApps = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
     fun start() {
         System.err.println("Starting sandbox environment...")
 
@@ -151,8 +157,24 @@ class SandboxManager {
         Thread.sleep(1000)
 
         // 4. Start Worker
+        // Capped heap (default 512m, override via SCREENSHOTTER_WORKER_MAX_HEAP) so a runaway
+        // allocation on the JVM heap fails fast with an OutOfMemoryError instead of pressuring the
+        // host's memory - and by extension, whatever else happens to share its cgroup - into a
+        // kernel/systemd-level OOM response.
+        //
+        // -Xmx alone doesn't cover this: it bounds the JVM *heap*, not native allocations made by
+        // libraries the worker loads via JNA/JNI (X11, AT-SPI, OpenCV) - which is exactly what bit
+        // us here (OpenCV's native thread pool attempting a ~896GB stack allocation). `ulimit -v`
+        // bounds the whole process's virtual address space at the kernel level, so *any* single
+        // allocation above the cap - JVM heap or native - fails immediately with ENOMEM, no matter
+        // what caused it. Default 8GB (override via SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB) leaves
+        // comfortable headroom for a real JVM + loaded native libs while still rejecting anything
+        // resembling that ~896GB attempt long before it can add real memory pressure.
+        val workerMaxHeap = System.getenv("SCREENSHOTTER_WORKER_MAX_HEAP")?.trim().takeUnless { it.isNullOrEmpty() } ?: "512m"
+        val workerMaxVirtualMemKb = (System.getenv("SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB")?.trim()?.toLongOrNull() ?: 8192L) * 1024
         val workerJar = Paths.get("worker/target/screenshotter-worker-0.1.0-SNAPSHOT-jar-with-dependencies.jar").toAbsolutePath().toString()
-        workerProc = startTracked(listOf("java", "-Djava.awt.headless=false", "-jar", workerJar, "0")) { pb ->
+        val workerCommand = "ulimit -v $workerMaxVirtualMemKb && exec java -Xmx$workerMaxHeap -Djava.awt.headless=false -jar '$workerJar' 0"
+        workerProc = startTracked(listOf("bash", "-c", workerCommand)) { pb ->
             // Use strictly isolated environment
             pb.environment().clear()
             pb.environment().putAll(sandboxEnv!!)
@@ -294,7 +316,78 @@ class SandboxManager {
             pb.environment().clear()
             sandboxEnv?.let { pb.environment().putAll(it) }
         }
-        return proc.pid().toInt()
+        val pid = proc.pid().toInt()
+        launchedApps[pid] = command
+        // Evict as soon as the app exits on its own, instead of only ever on an explicit
+        // close_app - see closeApp()'s doc comment for why a stale entry here is a real hazard,
+        // not just a memory leak: the OS can and does recycle PIDs.
+        proc.onExit().thenRun { launchedApps.remove(pid) }
+        return pid
+    }
+
+    /**
+     * Lists every viewable top-level window in the sandbox display, annotated - when resolvable -
+     * with the [launchApp]-returned PID of the app it belongs to, so a caller can tell which
+     * window came from which `launch_app` call instead of guessing from geometry/title alone.
+     *
+     * The worker reports each window's *actual* OS PID (from `_NET_WM_PID` - e.g. the JVM or
+     * Python process the app command ultimately exec'd into), which generally differs from the
+     * PID [launchApp] returned (the `setsid`+`bwrap` wrapper's PID). Both live in the same PID
+     * namespace, though (`launch_app` only isolates the mount namespace - see `bwrapCommand()`),
+     * and every descendant of that wrapper inherits its process *group* ID unless it explicitly
+     * changes it (nothing here does), so resolving the window's PID to its process group via
+     * `/proc/<pid>/stat` reliably maps it back to the PID `launch_app` handed out.
+     */
+    fun listWindows(): List<Map<String, Any?>> {
+        @Suppress("UNCHECKED_CAST")
+        val windows = sendCommand(mapOf("action" to "listWindows"))["windows"] as? List<Map<String, Any?>> ?: emptyList()
+        return windows.map { w ->
+            val pid = (w["pid"] as? Number)?.toLong()
+            val launchedPid = pid?.let { readProcessGroupId(it) }
+            w + mapOf(
+                "launchedPid" to launchedPid,
+                "command" to launchedPid?.let { launchedApps[it.toInt()] }
+            )
+        }
+    }
+
+    /** Reads the process group ID (field 5 of `/proc/<pid>/stat`) of a still-running process, or null. */
+    private fun readProcessGroupId(pid: Long): Long? {
+        return try {
+            val stat = File("/proc/$pid/stat").readText()
+            // `comm` (2nd field) is wrapped in parens and may itself contain spaces/parens, so
+            // split after the *last* ')' rather than just splitting on whitespace throughout.
+            val fieldsAfterComm = stat.substringAfterLast(')').trim().split(" ")
+            fieldsAfterComm[2].toLong() // state(0) ppid(1) pgrp(2)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Terminates a specific app previously started via [launchApp], identified by the PID it
+     * returned (which is also that app's process group, see [launchApp]'s doc comment) - without
+     * touching the sandbox's own services (display server, D-Bus, worker) or any other launched
+     * app. Refuses (returns false) for any PID this manager didn't itself hand out, so this can't
+     * be turned into an arbitrary-process-kill primitive by a caller guessing PIDs.
+     *
+     * [launchApp] evicts `pid` from [launchedApps] the moment the process exits on its own, which
+     * closes most of the window for the OS recycling `pid` onto an unrelated process before a
+     * later close_app call reuses the same number - but eviction races with a client's close_app
+     * call arriving at almost the same instant, so as a second, independent check, also require
+     * that `pid` is still its own process group leader (`setsid`, in [startTracked], guarantees
+     * every app we launch has `pgid == pid` for as long as it's alive; an unrelated process that
+     * inherited the recycled number would only coincidentally satisfy that too).
+     */
+    fun closeApp(pid: Int, force: Boolean = false): Boolean {
+        if (!launchedApps.containsKey(pid)) return false
+        if (readProcessGroupId(pid.toLong()) != pid.toLong()) {
+            launchedApps.remove(pid)
+            return false
+        }
+        killProcessGroup(pid, if (force) "KILL" else "TERM")
+        launchedApps.remove(pid)
+        return true
     }
 
     /**
@@ -332,12 +425,42 @@ class SandboxManager {
         return args
     }
 
-    /** Sends `signal` to every process in `pgid` at once (negative PID = process group, see kill(2)). */
+    /**
+     * Sends `signal` ("TERM" or "KILL") to `pgid` and every one of its descendants, one PID at a
+     * time via [ProcessHandle] - not by shelling out to `kill -$signal -$pgid` (negative PID =
+     * process group, see kill(2)), which is what this used to do.
+     *
+     * That approach was replaced after tracking down a real close_app bug: on this box, `kill
+     * -TERM -$pgid` run via `ProcessBuilder` was observed under `strace` to sometimes deliver the
+     * signal to the wrong target entirely - `kill(-4, SIGTERM)` instead of the intended pgid, e.g.
+     * `kill(-4075250, SIGTERM)` - a string-argument-parsing quirk in this system's `procps` build
+     * that doesn't reproduce with bash's builtin `kill`. `close_app` would report success (the
+     * external `kill` process exits 0 either way) while the sandboxed app kept running completely
+     * untouched. [ProcessHandle.destroy]/[ProcessHandle.destroyForcibly] call `kill(2)` directly
+     * on each PID from inside the JVM, with no external process and no string arguments to
+     * mis-parse in between.
+     *
+     * When `SCREENSHOTTER_DRY_RUN_KILL` is set (any non-empty value), no signal is actually sent -
+     * this just logs what it would have done. A safety valve for exercising close_app()/stop()'s
+     * targeting logic (which pgid, when) without any risk of an actual kill reaching further than
+     * intended while that's still being investigated.
+     */
     private fun killProcessGroup(pgid: Int, signal: String = "TERM") {
         if (pgid <= 0) return
-        try {
-            ProcessBuilder("kill", "-$signal", "-$pgid").start().waitFor()
-        } catch (ignored: Exception) {}
+        if (!System.getenv("SCREENSHOTTER_DRY_RUN_KILL").isNullOrEmpty()) {
+            System.err.println("[DRY RUN] would send $signal to pid $pgid and its descendants")
+            return
+        }
+        val leader = ProcessHandle.of(pgid.toLong()).orElse(null)
+        if (leader == null) {
+            System.err.println("[closeApp] pid $pgid is already gone, nothing to signal")
+            return
+        }
+        val targets = leader.descendants().toList() + leader
+        for (h in targets) {
+            val sent = if (signal == "KILL") h.destroyForcibly() else h.destroy()
+            System.err.println("[closeApp] sent $signal to pid ${h.pid()} (part of group $pgid): $sent")
+        }
     }
 
     private fun findFreeDisplay(): Int {
@@ -468,13 +591,19 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                 ),
                 ToolInfo(
                     name = "resize_window",
-                    description = "Resizes the active window.",
+                    description = "Resizes a window in the sandbox display. With no 'window_id', resizes every " +
+                        "top-level window (fine with a single app open, ambiguous otherwise) - pass the " +
+                        "'window_id' from 'list_windows' to target just one window.",
                     inputSchema = mapOf(
                         "type" to "object",
                         "required" to listOf("width", "height"),
                         "properties" to mapOf(
                             "width" to mapOf("type" to "integer"),
-                            "height" to mapOf("type" to "integer")
+                            "height" to mapOf("type" to "integer"),
+                            "window_id" to mapOf(
+                                "type" to "integer",
+                                "description" to "X11 window ID (from 'list_windows') to resize. Omit to resize every top-level window."
+                            )
                         )
                     )
                 ),
@@ -547,6 +676,28 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                         ),
                         "required" to listOf("command")
                     )
+                ),
+                ToolInfo(
+                    name = "list_windows",
+                    description = "Lists every top-level window currently visible in the sandbox display, with " +
+                        "its position/size and, when resolvable, the PID that 'launch_app' returned for the app " +
+                        "it belongs to (as 'launched_pid') and the command it was launched with. Use this to " +
+                        "figure out which window belongs to which launched app once more than one is open.",
+                    inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+                ),
+                ToolInfo(
+                    name = "close_app",
+                    description = "Terminates an app previously started via 'launch_app', identified by the PID " +
+                        "it returned. Only affects that one app - the sandbox and any other launched apps keep " +
+                        "running.",
+                    inputSchema = mapOf(
+                        "type" to "object",
+                        "required" to listOf("pid"),
+                        "properties" to mapOf(
+                            "pid" to mapOf("type" to "integer", "description" to "The PID returned by 'launch_app'."),
+                            "force" to mapOf("type" to "boolean", "description" to "Send SIGKILL instead of SIGTERM. Defaults to false.")
+                        )
+                    )
                 )
             ))
         }
@@ -604,9 +755,44 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                     sandbox.sendCommand(mapOf(
                         "action" to "resizeWindow",
                         "width" to ((arguments?.get("width") as? Number)?.toInt() ?: 1024),
-                        "height" to ((arguments?.get("height") as? Number)?.toInt() ?: 768)
+                        "height" to ((arguments?.get("height") as? Number)?.toInt() ?: 768),
+                        "windowId" to (arguments?.get("window_id") as? Number)?.toLong()
                     ))
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to "Window resized.")))
+                } else if (name == "list_windows") {
+                    val windows = sandbox.listWindows().map { w ->
+                        mapOf(
+                            "window_id" to w["windowId"],
+                            "pid" to w["pid"],
+                            "launched_pid" to w["launchedPid"],
+                            "command" to w["command"],
+                            "title" to w["title"],
+                            "x" to w["x"],
+                            "y" to w["y"],
+                            "width" to w["width"],
+                            "height" to w["height"]
+                        )
+                    }
+                    ToolResult(content = listOf(mapOf(
+                        "type" to "text",
+                        "text" to mapper.writeValueAsString(mapOf("windows" to windows))
+                    )))
+                } else if (name == "close_app") {
+                    val pid = (arguments?.get("pid") as? Number)?.toInt()
+                    if (pid == null) {
+                        ToolResult(content = listOf(mapOf("type" to "text", "text" to "Error: 'pid' is required.")), isError = true)
+                    } else {
+                        val force = (arguments["force"] as? Boolean) ?: false
+                        val closed = sandbox.closeApp(pid, force)
+                        if (closed) {
+                            ToolResult(content = listOf(mapOf("type" to "text", "text" to "App with PID $pid terminated.")))
+                        } else {
+                            ToolResult(content = listOf(mapOf(
+                                "type" to "text",
+                                "text" to "Error: no app launched via 'launch_app' with PID $pid (already closed, or never launched by this server)."
+                            )), isError = true)
+                        }
+                    }
                 } else if (name == "get_ui_tree") {
                     val res = sandbox.sendCommand(mapOf("action" to "getUiTree"))
                     ToolResult(content = listOf(mapOf("type" to "text", "text" to mapper.writeValueAsString(res["tree"]))))

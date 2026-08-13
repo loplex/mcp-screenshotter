@@ -8,9 +8,24 @@ import java.awt.image.DataBufferByte
 
 class VisionFallback {
 
-    init {
-        // Loads the native OpenCV library bundled by OpenPnP
+    // Loads the native OpenCV library bundled by OpenPnP only on first actual use, not merely on
+    // VisionFallback() construction. Loading it eagerly at worker startup - regardless of whether
+    // detect_ui_elements is ever called - was triggering OpenCV's native thread-pool
+    // initialization on every single worker start, which in this environment attempted a bogus
+    // ~896GB stack allocation (visible in dmesg as "Thread (pooled) ... not enough memory for the
+    // allocation") that never succeeded but still added avoidable memory pressure to every run.
+    //
+    // setNumThreads(0) right after loading is the actual fix for that bug, not just a deferral of
+    // it - per OpenCV's own docs, 0 (not 1!) is the special value that disables its threading
+    // optimizations outright and runs everything on the calling thread. Passing 1 still asks for a
+    // pool sized for one *managed* worker thread, which still goes through the same parallel-
+    // framework setup (and its apparently miscomputed per-thread stack size) that requested
+    // ~896GB in the first place - only 0 skips that code path entirely. Single-threaded
+    // Canny/contour-finding on a screenshot-sized image is still well under a second, so this
+    // costs nothing in practice.
+    private val openCvLoaded by lazy {
         OpenCV.loadLocally()
+        Core.setNumThreads(0)
     }
 
     private fun bufferedImageToMat(bi: BufferedImage): Mat {
@@ -25,6 +40,8 @@ class VisionFallback {
      * Returns a list of bounding boxes (x, y, width, height) of detected UI elements.
      */
     fun detectElements(image: BufferedImage): List<Map<String, Int>> {
+        openCvLoaded // force the lazy native-library load before touching any org.opencv.* class
+
         // Convert the image to 3-byte BGR format which OpenCV expects natively
         val bgrImage = BufferedImage(image.width, image.height, BufferedImage.TYPE_3BYTE_BGR)
         val g = bgrImage.createGraphics()

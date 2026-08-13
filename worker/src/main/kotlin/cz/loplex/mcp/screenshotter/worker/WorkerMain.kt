@@ -13,7 +13,10 @@ fun main(args: Array<String>) {
     val mapper = jacksonObjectMapper()
     val atSpiReader = AtSpiReader()
     val clipboardManager = ClipboardManager()
-    val visionFallback = VisionFallback()
+    // Lazy: VisionFallback's own OpenCV load is already deferred to first use, but keep
+    // construction itself lazy too so nothing OpenCV-related happens at worker startup at all
+    // unless detect_ui_elements is actually called.
+    val visionFallback by lazy { VisionFallback() }
 
     val httpServer = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
 
@@ -73,7 +76,21 @@ fun main(args: Array<String>) {
                     "resizeWindow" -> {
                         val rw = (request["width"] as? Number)?.toInt() ?: 1024
                         val rh = (request["height"] as? Number)?.toInt() ?: 768
-                        serverLogic.resizeTopLevelWindows(rw, rh)
+                        val windowId = (request["windowId"] as? Number)?.toLong()
+                        serverLogic.resizeTopLevelWindows(rw, rh, windowId)
+                    }
+                    "listWindows" -> {
+                        response["windows"] = serverLogic.listWindows().map {
+                            mapOf(
+                                "windowId" to it.windowId,
+                                "pid" to it.pid,
+                                "title" to it.title,
+                                "x" to it.x,
+                                "y" to it.y,
+                                "width" to it.width,
+                                "height" to it.height
+                            )
+                        }
                     }
                     "getUiTree" -> {
                         response["tree"] = atSpiReader.getUiTree()

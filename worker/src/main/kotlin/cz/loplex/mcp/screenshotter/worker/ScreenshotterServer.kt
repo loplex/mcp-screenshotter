@@ -17,6 +17,16 @@ class ScreenshotterServer(
     private val x11: X11Ext = X11Ext.INSTANCE
 ) {
 
+    init {
+        // Xlib's default error handler calls exit() at the native level on any error (e.g.
+        // BadWindow from resizing a window that already closed, or one a client made up) -
+        // that bypasses the JVM entirely and kills the whole worker process for what should be
+        // a single failed tool call. Installing a handler that just logs and returns replaces
+        // that behavior with "the offending X11 call silently has no effect," which is safe
+        // here since none of our X11 calls inspect their return value for error conditions.
+        x11.XSetErrorHandler(silentX11ErrorHandler)
+    }
+
     private var lastScreenshot: BufferedImage? = null
     
     // Lazy initialization so tests without X11 DISPLAY won't crash during class instantiation
@@ -288,25 +298,34 @@ class ScreenshotterServer(
     }
 
     /**
-     * Resizes all viewable top-level windows (direct children of the root window)
-     * using JNA and native X11 calls.
+     * Resizes windows in the sandbox display using JNA and native X11 calls.
+     *
+     * When [windowId] is null (the default, and the prior behavior), every viewable top-level
+     * window (direct child of the root window) is resized - fine for a single-app sandbox, but
+     * ambiguous once more than one app is running (see FUTURE_WORK #8). Pass a specific
+     * [windowId] (from [listWindows]) to scope the resize to just that one window instead.
      */
-    fun resizeTopLevelWindows(width: Int, height: Int) {
+    fun resizeTopLevelWindows(width: Int, height: Int, windowId: Long? = null) {
         val display = x11.XOpenDisplay(null) ?: throw RuntimeException("Failed to open X11 display for resizing")
-        
+
         try {
+            if (windowId != null) {
+                x11.XResizeWindow(display, com.sun.jna.platform.unix.X11.Window(windowId), width, height)
+                return
+            }
+
             val root = x11.XDefaultRootWindow(display)
-            
+
             val rootRef = com.sun.jna.platform.unix.X11.WindowByReference()
             val parentRef = com.sun.jna.platform.unix.X11.WindowByReference()
             val childrenRef = com.sun.jna.ptr.PointerByReference()
             val childrenCountRef = com.sun.jna.ptr.IntByReference()
-            
+
             val status = x11.XQueryTree(display, root, rootRef, parentRef, childrenRef, childrenCountRef)
             if (status != 0 && childrenCountRef.value > 0) {
                 val childrenPtr = childrenRef.value
                 val childCount = childrenCountRef.value
-                
+
                 for (i in 0 until childCount) {
                     val winId = if (com.sun.jna.Native.LONG_SIZE == 8) {
                         childrenPtr.getLong(i * 8L)
@@ -314,10 +333,10 @@ class ScreenshotterServer(
                         childrenPtr.getInt(i * 4L).toLong()
                     }
                     val win = com.sun.jna.platform.unix.X11.Window(winId)
-                    
+
                     val attributes = com.sun.jna.platform.unix.X11.XWindowAttributes()
                     x11.XGetWindowAttributes(display, win, attributes)
-                    
+
                     // IsViewable = 2
                     if (attributes.map_state == com.sun.jna.platform.unix.X11.IsViewable) {
                         x11.XResizeWindow(display, win, width, height)
@@ -327,6 +346,136 @@ class ScreenshotterServer(
             }
         } finally {
             x11.XCloseDisplay(display)
+        }
+    }
+
+    /** One viewable top-level window, as reported by [listWindows]. */
+    data class WindowInfo(
+        val windowId: Long,
+        val pid: Long?,
+        val title: String?,
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int
+    )
+
+    /**
+     * Lists every viewable top-level window (direct child of the root window), together with the
+     * PID of the process that owns it (from the `_NET_WM_PID` property, when the app/toolkit sets
+     * one - GTK/Qt/AWT all do), its title, and its geometry. Lets a caller correlate a window with
+     * the PID [SandboxManager.launchApp] returned for it (see FUTURE_WORK #8), instead of every
+     * tool implicitly operating on "whatever is on screen."
+     *
+     * There is no window manager running inside the sandbox, so top-level windows are the root's
+     * direct children and [com.sun.jna.platform.unix.X11.XWindowAttributes]' geometry is already
+     * screen-relative - no reparenting/frame offset to account for.
+     */
+    fun listWindows(): List<WindowInfo> {
+        val display = x11.XOpenDisplay(null) ?: throw RuntimeException("Failed to open X11 display for listing windows")
+        try {
+            val root = x11.XDefaultRootWindow(display)
+            val netWmPidAtom = x11.XInternAtom(display, "_NET_WM_PID", false)
+
+            val rootRef = com.sun.jna.platform.unix.X11.WindowByReference()
+            val parentRef = com.sun.jna.platform.unix.X11.WindowByReference()
+            val childrenRef = com.sun.jna.ptr.PointerByReference()
+            val childrenCountRef = com.sun.jna.ptr.IntByReference()
+
+            val status = x11.XQueryTree(display, root, rootRef, parentRef, childrenRef, childrenCountRef)
+            if (status == 0 || childrenCountRef.value <= 0) return emptyList()
+
+            val childrenPtr = childrenRef.value
+            val childCount = childrenCountRef.value
+            val windows = mutableListOf<WindowInfo>()
+
+            for (i in 0 until childCount) {
+                val winId = if (com.sun.jna.Native.LONG_SIZE == 8) {
+                    childrenPtr.getLong(i * 8L)
+                } else {
+                    childrenPtr.getInt(i * 4L).toLong()
+                }
+                val win = com.sun.jna.platform.unix.X11.Window(winId)
+
+                val attributes = com.sun.jna.platform.unix.X11.XWindowAttributes()
+                x11.XGetWindowAttributes(display, win, attributes)
+                if (attributes.map_state != com.sun.jna.platform.unix.X11.IsViewable) continue
+
+                windows.add(
+                    WindowInfo(
+                        windowId = winId,
+                        pid = readWmPid(display, win, netWmPidAtom),
+                        title = readWindowTitle(display, win),
+                        x = attributes.x,
+                        y = attributes.y,
+                        width = attributes.width,
+                        height = attributes.height
+                    )
+                )
+            }
+            x11.XFree(childrenPtr)
+            return windows
+        } finally {
+            x11.XCloseDisplay(display)
+        }
+    }
+
+    /** Reads the single-CARDINAL `_NET_WM_PID` property off `win`; null if it was never set. */
+    private fun readWmPid(
+        display: com.sun.jna.platform.unix.X11.Display,
+        win: com.sun.jna.platform.unix.X11.Window,
+        atom: com.sun.jna.platform.unix.X11.Atom
+    ): Long? {
+        val actualTypeReturn = com.sun.jna.platform.unix.X11.AtomByReference()
+        val actualFormatReturn = com.sun.jna.ptr.IntByReference()
+        val nitemsReturn = com.sun.jna.ptr.NativeLongByReference()
+        val bytesAfterReturn = com.sun.jna.ptr.NativeLongByReference()
+        val propReturn = com.sun.jna.ptr.PointerByReference()
+        val result = x11.XGetWindowProperty(
+            display, win, atom,
+            com.sun.jna.NativeLong(0), com.sun.jna.NativeLong(1), false,
+            com.sun.jna.platform.unix.X11.XA_CARDINAL,
+            actualTypeReturn, actualFormatReturn, nitemsReturn, bytesAfterReturn, propReturn
+        )
+        val prop = propReturn.value
+        if (result != 0 || prop == null) return null
+        // Xlib allocates prop_return whenever the call succeeds, even if the property doesn't
+        // exist (nitems == 0) - it must be XFree()'d in that case too, or every window without a
+        // _NET_WM_PID leaks one native allocation per list_windows() call.
+        try {
+            if (nitemsReturn.value.toLong() == 0L) return null
+            return prop.getInt(0).toLong()
+        } finally {
+            x11.XFree(prop)
+        }
+    }
+
+    /** Reads `win`'s title via `XFetchName` (`WM_NAME`); null if it was never set. */
+    private fun readWindowTitle(
+        display: com.sun.jna.platform.unix.X11.Display,
+        win: com.sun.jna.platform.unix.X11.Window
+    ): String? {
+        val nameRef = com.sun.jna.ptr.PointerByReference()
+        val status = x11.XFetchName(display, win, nameRef)
+        val namePtr = nameRef.value
+        if (status == 0 || namePtr == null) return null
+        val name = namePtr.getString(0)
+        x11.XFree(namePtr)
+        return name
+    }
+
+    companion object {
+        // Kept as a top-level val (strong reference) rather than a local/lambda passed straight
+        // into XSetErrorHandler: JNA only holds a weak reference to Callback instances on the
+        // native side, so a handler with no other Java-side reference is eligible for GC and can
+        // silently stop being called once collected.
+        internal val silentX11ErrorHandler = com.sun.jna.platform.unix.X11.XErrorHandler { _, errorEvent ->
+            System.err.println(
+                "Ignored X11 error (error_code=${errorEvent.error_code}, " +
+                    "request_code=${errorEvent.request_code}, minor_code=${errorEvent.minor_code}) " +
+                    "to avoid crashing the worker process"
+            )
+            0
         }
     }
 }
