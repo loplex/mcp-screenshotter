@@ -73,7 +73,9 @@ class SandboxManager {
     // app's process *group* ID) to the command it was launched with. Lets list_windows() report
     // which launched app a given window belongs to, and lets closeApp() refuse to touch a PID it
     // didn't itself hand out - see FUTURE_WORK #8.
-    private val launchedApps = java.util.concurrent.ConcurrentHashMap<Int, String>()
+    // `internal` (not `private`) purely for testability, same convention as bwrapCommand/
+    // readProcessGroupId/safeDeleteRecursively - see SandboxManagerCloseAppTest.
+    internal val launchedApps = java.util.concurrent.ConcurrentHashMap<Int, String>()
 
     fun start() {
         System.err.println("Starting sandbox environment...")
@@ -509,41 +511,68 @@ class SandboxManager {
         return args
     }
 
+    /** Minimal libc binding for a raw `kill(2)` call - see [killProcessGroup]'s doc comment for why. */
+    private interface LibCExt : com.sun.jna.Library {
+        fun kill(pid: Int, sig: Int): Int
+
+        companion object {
+            val INSTANCE: LibCExt = com.sun.jna.Native.load("c", LibCExt::class.java)
+        }
+    }
+
     /**
-     * Sends `signal` ("TERM" or "KILL") to `pgid` and every one of its descendants, one PID at a
-     * time via [ProcessHandle] - not by shelling out to `kill -$signal -$pgid` (negative PID =
-     * process group, see kill(2)), which is what this used to do.
+     * Sends `signal` ("TERM" or "KILL") to every process in `pgid`'s process group with a single
+     * `kill(2)` call - a negative `pid` argument to `kill(2)` targets the whole group atomically
+     * at the kernel level, in one syscall, rather than [ProcessHandle]-per-PID (what this used to
+     * do) or shelling out to the external `kill` binary (what it did before that).
      *
-     * That approach was replaced after tracking down a real close_app bug: on this box, `kill
-     * -TERM -$pgid` run via `ProcessBuilder` was observed under `strace` to sometimes deliver the
-     * signal to the wrong target entirely - `kill(-4, SIGTERM)` instead of the intended pgid, e.g.
-     * `kill(-4075250, SIGTERM)` - a string-argument-parsing quirk in this system's `procps` build
-     * that doesn't reproduce with bash's builtin `kill`. `close_app` would report success (the
-     * external `kill` process exits 0 either way) while the sandboxed app kept running completely
-     * untouched. [ProcessHandle.destroy]/[ProcessHandle.destroyForcibly] call `kill(2)` directly
-     * on each PID from inside the JVM, with no external process and no string arguments to
-     * mis-parse in between.
+     * Both those approaches carried a real cost this doesn't:
+     *  - Shelling out to `kill -$signal -$pgid` was found (via `strace`) to occasionally deliver
+     *    the signal to the wrong target entirely on this box - `kill(-4, SIGTERM)` instead of the
+     *    intended `kill(-4075250, SIGTERM)` - a string-argument-parsing quirk in this system's
+     *    `procps` build that doesn't reproduce with bash's builtin `kill`; `close_app` reported
+     *    success (the external process exits 0 either way) while the sandboxed app kept running
+     *    untouched. See `NOTES/AI/2026-08-14-kill-procps-investigation.md` for the full writeup -
+     *    the root cause in `procps` itself is still open, but irrelevant here: this never shells
+     *    out to any `kill` binary, procps or otherwise, so that bug has no surface to reappear on.
+     *  - The `ProcessHandle`-per-PID replacement fixed that, but at the cost of atomicity:
+     *    `leader.descendants().toList() + leader` takes a *snapshot*, so a process that forks a
+     *    new child between that snapshot and the loop's last `destroy()` call could dodge the
+     *    signal entirely. A single `kill(-pgid, sig)` has no such window - the kernel signals
+     *    every process that is a member of the group *at the instant of the syscall*, as one
+     *    atomic operation, so a concurrent fork either lands in the group before the signal (and
+     *    gets it) or hasn't joined the group yet (and isn't part of what we're tearing down).
      *
      * When `SCREENSHOTTER_DRY_RUN_KILL` is set (any non-empty value), no signal is actually sent -
      * this just logs what it would have done. A safety valve for exercising close_app()/stop()'s
      * targeting logic (which pgid, when) without any risk of an actual kill reaching further than
-     * intended while that's still being investigated.
+     * intended.
      */
     private fun killProcessGroup(pgid: Int, signal: String = "TERM") {
         if (pgid <= 0) return
         if (!System.getenv("SCREENSHOTTER_DRY_RUN_KILL").isNullOrEmpty()) {
-            System.err.println("[DRY RUN] would send $signal to pid $pgid and its descendants")
+            System.err.println("[DRY RUN] would send $signal to process group $pgid")
             return
         }
-        val leader = ProcessHandle.of(pgid.toLong()).orElse(null)
-        if (leader == null) {
-            System.err.println("[closeApp] pid $pgid is already gone, nothing to signal")
-            return
+        val signalNumber = when (signal) {
+            "KILL" -> 9
+            "TERM" -> 15
+            else -> throw IllegalArgumentException("Unsupported signal '$signal'; expected TERM or KILL.")
         }
-        val targets = leader.descendants().toList() + leader
-        for (h in targets) {
-            val sent = if (signal == "KILL") h.destroyForcibly() else h.destroy()
-            System.err.println("[closeApp] sent $signal to pid ${h.pid()} (part of group $pgid): $sent")
+        // Checking the raw return value (0 = success) rather than declaring this `kill` to throw
+        // LastErrorException: that JNA feature throws whenever errno is left non-zero after the
+        // call, but kill(2) only ever *sets* errno on failure - it never clears a stale value left
+        // over from an unrelated earlier libc call on the same thread, so it isn't a reliable
+        // signal here.
+        val result = LibCExt.INSTANCE.kill(-pgid, signalNumber)
+        if (result == 0) {
+            System.err.println("[closeApp] sent $signal to process group $pgid via kill(2)")
+        } else {
+            // A non-zero result here almost always means ESRCH: the group is already gone by the
+            // time we got here (e.g. the app exited on its own between eviction and this call) -
+            // this call was always racing whatever else might tear the group down, not a real
+            // failure worth surfacing as one.
+            System.err.println("[closeApp] kill(-$pgid, $signal) returned $result (group likely already gone)")
         }
     }
 

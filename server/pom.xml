@@ -24,6 +24,12 @@
             <artifactId>jackson-module-kotlin</artifactId>
         </dependency>
 
+        <!-- JNA for a direct kill(2) syscall in killProcessGroup() - see its doc comment -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+        </dependency>
+
         <!-- JUnit for Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
