@@ -1,6 +1,7 @@
 package cz.loplex.mcp.screenshotter.worker
 
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.awt.Color
 import java.awt.Rectangle
 import java.awt.image.BufferedImage
@@ -110,6 +111,40 @@ class ScreenshotterServerTest {
         // untouched image set via updateLastScreenshot() above, not `annotated`.
         assertEquals(baseline, server.getLastScreenshot())
         assertEquals(Color.WHITE.rgb, server.getLastScreenshot()!!.getRGB(15, 15))
+    }
+
+    @Test
+    fun `test clampCropRect leaves an in-bounds crop untouched`() {
+        val server = ScreenshotterServer()
+        val clamped = server.clampCropRect(Rectangle(10, 20, 30, 40), 200, 100)
+        assertEquals(Rectangle(10, 20, 30, 40), clamped)
+    }
+
+    @Test
+    fun `test clampCropRect clamps a crop that hangs off the right and bottom edges`() {
+        val server = ScreenshotterServer()
+        // Screen is 100x100; crop starts at (90, 90) and asks for 50x50, which would put its far
+        // edge well past the screen on both axes.
+        val clamped = server.clampCropRect(Rectangle(90, 90, 50, 50), 100, 100)
+        assertEquals(Rectangle(90, 90, 10, 10), clamped)
+    }
+
+    @Test
+    fun `test clampCropRect clamps negative x,y up to the screen origin`() {
+        val server = ScreenshotterServer()
+        val clamped = server.clampCropRect(Rectangle(-20, -30, 50, 60), 200, 100)
+        assertEquals(Rectangle(0, 0, 30, 30), clamped)
+    }
+
+    @Test
+    fun `test clampCropRect throws a clear error for a crop entirely off-screen`() {
+        val server = ScreenshotterServer()
+        // x=2000 on a 1024px-wide screen used to make getSubimage() throw an opaque
+        // RasterFormatException (width went negative) - see clampCropRect()'s doc comment.
+        val ex = assertThrows<IllegalArgumentException> {
+            server.clampCropRect(Rectangle(2000, 0, 100, 100), 1024, 768)
+        }
+        assertEquals(true, ex.message?.contains("doesn't overlap the screen"))
     }
 
     private fun createTestImage(width: Int, height: Int, color: Color): BufferedImage {

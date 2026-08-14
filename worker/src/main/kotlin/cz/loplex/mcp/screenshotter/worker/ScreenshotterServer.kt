@@ -47,17 +47,42 @@ class ScreenshotterServer(
         val screenSize = Toolkit.getDefaultToolkit().screenSize
         val fullRect = Rectangle(screenSize)
         val fullImage = robot.createScreenCapture(fullRect)
-        
+
         return if (cropRect != null) {
-            // Ensure crop is within bounds
-            val safeX = maxOf(0, cropRect.x)
-            val safeY = maxOf(0, cropRect.y)
-            val safeW = minOf(fullImage.width - safeX, cropRect.width)
-            val safeH = minOf(fullImage.height - safeY, cropRect.height)
-            fullImage.getSubimage(safeX, safeY, safeW, safeH)
+            val safe = clampCropRect(cropRect, fullImage.width, fullImage.height)
+            fullImage.getSubimage(safe.x, safe.y, safe.width, safe.height)
         } else {
             fullImage
         }
+    }
+
+    /**
+     * Clamps `cropRect` so it fits entirely within a `imageWidth`x`imageHeight` image, for
+     * [takeScreenshot] to then pass straight to [BufferedImage.getSubimage].
+     *
+     * The previous version only clamped `x`/`y` from below (`maxOf(0, ...)`), not from above
+     * against the actual image dimensions - a crop starting past the right/bottom edge (e.g.
+     * `x=2000` on a 1024px-wide screen) left `width`/`height` negative, and `getSubimage()` threw
+     * an opaque `RasterFormatException` for it. Clamping both edges of both axes fixes the normal
+     * case (a crop that only partially hangs off an edge); a crop that doesn't overlap the image
+     * at all has no sensible sub-image to return, so that case throws an [IllegalArgumentException]
+     * with a clear, actionable message instead of letting `getSubimage()` fail unexplained.
+     */
+    internal fun clampCropRect(cropRect: Rectangle, imageWidth: Int, imageHeight: Int): Rectangle {
+        // Interval-clip each axis to [0, imageWidth)/[0, imageHeight) rather than clamping x/y and
+        // width/height independently: shifting a negative x up to 0 without also shrinking width
+        // by the same amount would grow the crop to cover columns it was never asked for.
+        val safeX = maxOf(cropRect.x, 0)
+        val safeY = maxOf(cropRect.y, 0)
+        val safeW = minOf(cropRect.x + cropRect.width, imageWidth) - safeX
+        val safeH = minOf(cropRect.y + cropRect.height, imageHeight) - safeY
+        if (safeW <= 0 || safeH <= 0) {
+            throw IllegalArgumentException(
+                "Crop rectangle $cropRect doesn't overlap the screen at all " +
+                    "(screen is ${imageWidth}x$imageHeight)"
+            )
+        }
+        return Rectangle(safeX, safeY, safeW, safeH)
     }
 
     /**
