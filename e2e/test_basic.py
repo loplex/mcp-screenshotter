@@ -25,7 +25,7 @@ def send_request(proc, method, params=None, req_id=1):
 def test_mcp_server():
     print("Starting E2E Test Client for MCP Screenshotter...")
     
-    jar_path = "server/target/screenshotter-server-0.1.0-SNAPSHOT-jar-with-dependencies.jar"
+    jar_path = "server/target/screenshotter-server.jar"
     if not os.path.exists(jar_path):
         print(f"ERROR: {jar_path} not found. Run 'mvn package' first.")
         return

@@ -71,7 +71,7 @@ environment variable, read once when the orchestrator starts:
   mirror](#vnc-mirror-optional) below if you still want to see or interact with it.
 
 ```bash
-SCREENSHOTTER_DISPLAY_BACKEND=xvfb java -jar server/target/screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar
+SCREENSHOTTER_DISPLAY_BACKEND=xvfb java -jar server/target/screenshotter-server.jar
 ```
 
 Or, in `claude_desktop_config.json`, add it under the server's `"env"` key (see
@@ -84,7 +84,7 @@ useful with the `xvfb` backend, which otherwise has no window anywhere for a hum
 Unset (the default), no VNC mirror is started at all.
 
 ```bash
-SCREENSHOTTER_DISPLAY_BACKEND=xvfb SCREENSHOTTER_VNC_PORT=5900 java -jar server/target/screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar
+SCREENSHOTTER_DISPLAY_BACKEND=xvfb SCREENSHOTTER_VNC_PORT=5900 java -jar server/target/screenshotter-server.jar
 ```
 
 Connect any VNC viewer to `127.0.0.1:5900` while the server is running. It's started with
@@ -102,7 +102,7 @@ wrapped in `ulimit -v` (default `8192` MB of virtual address space; override via
 the kernel level.
 
 ```bash
-SCREENSHOTTER_WORKER_MAX_HEAP=1g SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB=4096 java -jar server/target/screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar
+SCREENSHOTTER_WORKER_MAX_HEAP=1g SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB=4096 java -jar server/target/screenshotter-server.jar
 ```
 
 For debugging `close_app`/shutdown targeting without any risk of an actual kill signal going
@@ -115,7 +115,12 @@ somewhere unintended, set `SCREENSHOTTER_DRY_RUN_KILL` (any non-empty value) - e
    ```bash
    mvn clean package -DskipTests
    ```
-   This produces `screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar` and the corresponding worker jar.
+   This produces `server/target/screenshotter-server.jar` and `worker/target/screenshotter-worker.jar`.
+   Both filenames are fixed (no version, no build-tool-specific suffix) so the orchestrator can
+   find the worker jar - and this doc, the code you're about to run, doesn't need updating on
+   every version bump. The orchestrator locates the worker jar next to its own module (`worker/`
+   sitting alongside `server/`); if you've moved it somewhere else, point at it explicitly via
+   `SCREENSHOTTER_WORKER_JAR=/path/to/screenshotter-worker.jar`.
 
 2. **Run E2E Tests:**
    A full GUI end-to-end test is provided, which spins up the MCP server, launches a Python test application, finds a button using OpenCV/AT-SPI2, clicks it, and verifies the screenshot.
@@ -148,7 +153,7 @@ Add the following configuration to your `claude_desktop_config.json`:
       "command": "java",
       "args": [
         "-jar",
-        "/absolute/path/to/mcp-screenshotter/server/target/screenshotter-server-0.2.0-SNAPSHOT-jar-with-dependencies.jar"
+        "/absolute/path/to/mcp-screenshotter/server/target/screenshotter-server.jar"
       ],
       "env": {
         "SCREENSHOTTER_DISPLAY_BACKEND": "xephyr",

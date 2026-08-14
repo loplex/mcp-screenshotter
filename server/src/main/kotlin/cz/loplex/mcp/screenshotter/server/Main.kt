@@ -172,7 +172,7 @@ class SandboxManager {
         // resembling that ~896GB attempt long before it can add real memory pressure.
         val workerMaxHeap = System.getenv("SCREENSHOTTER_WORKER_MAX_HEAP")?.trim().takeUnless { it.isNullOrEmpty() } ?: "512m"
         val workerMaxVirtualMemKb = (System.getenv("SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB")?.trim()?.toLongOrNull() ?: 8192L) * 1024
-        val workerJar = Paths.get("worker/target/screenshotter-worker-0.1.0-SNAPSHOT-jar-with-dependencies.jar").toAbsolutePath().toString()
+        val workerJar = resolveWorkerJar()
         val workerCommand = "ulimit -v $workerMaxVirtualMemKb && exec java -Xmx$workerMaxHeap -Djava.awt.headless=false -jar '$workerJar' 0"
         workerProc = startTracked(listOf("bash", "-c", workerCommand)) { pb ->
             // Use strictly isolated environment
@@ -219,6 +219,41 @@ class SandboxManager {
         if (raw.isNullOrEmpty()) return null
         return raw.toIntOrNull()
             ?: throw IllegalArgumentException("SCREENSHOTTER_VNC_PORT must be a port number, got '$raw'.")
+    }
+
+    /**
+     * Locates the worker jar to launch:
+     *  1. `SCREENSHOTTER_WORKER_JAR` env var, if set - an explicit override for deployments where
+     *     the module layout below doesn't apply.
+     *  2. Otherwise, `worker/target/screenshotter-worker.jar`, resolved next to wherever *this
+     *     server's own* jar/class files actually live on disk - not the process's current working
+     *     directory, which an MCP host (e.g. Claude Desktop) is free to launch us from anywhere.
+     *     The filename itself is fixed (no version, no assembly-plugin "-jar-with-dependencies"
+     *     classifier) via `finalName`/`appendAssemblyId` on the assembly plugin in the parent
+     *     `pom.xml`, so this never has to know this project's version or Maven's naming
+     *     convention - and can't silently desync from it the way a hardcoded version string once
+     *     did (this used to say "0.1.0-SNAPSHOT" long after the project moved on to
+     *     "0.2.0-SNAPSHOT").
+     */
+    private fun resolveWorkerJar(): String {
+        System.getenv("SCREENSHOTTER_WORKER_JAR")?.trim()?.takeUnless { it.isEmpty() }?.let { return it }
+
+        // codeSource.location is either this server's own jar file (a packaged run) or its
+        // target/classes directory (run straight from Maven/an IDE) - either way it's a direct
+        // child of server/target/, so three parents up lands on the project root regardless.
+        val serverLocation = Paths.get(
+            SandboxManager::class.java.protectionDomain.codeSource.location.toURI()
+        )
+        val projectRoot = serverLocation.parent.parent.parent
+        val workerJar = projectRoot.resolve("worker").resolve("target").resolve("screenshotter-worker.jar")
+
+        if (!Files.isRegularFile(workerJar)) {
+            throw RuntimeException(
+                "Worker jar not found at $workerJar. Run 'mvn clean package' first, or set " +
+                    "SCREENSHOTTER_WORKER_JAR to an explicit path."
+            )
+        }
+        return workerJar.toAbsolutePath().toString()
     }
 
     /** Builds the launch command for `backend`; both take the same 1024x768 resolution, just in their own flag syntax. */

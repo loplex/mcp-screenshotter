@@ -36,7 +36,7 @@ def list_windows(proc, req_id):
 def test_multi_app_scenario():
     print("=== Starting Multi-App Session Management E2E Test ===")
 
-    jar_path = "server/target/screenshotter-server-0.1.0-SNAPSHOT-jar-with-dependencies.jar"
+    jar_path = "server/target/screenshotter-server.jar"
     if not os.path.exists(jar_path):
         print(f"ERROR: {jar_path} not found. Run 'mvn package' first.")
         return
