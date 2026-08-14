@@ -88,6 +88,21 @@ class ScreenshotterServerTest {
     }
 
     @Test
+    fun `test getChangedBoundingBoxes detects a single-pixel change at odd coordinates`() {
+        val server = ScreenshotterServer()
+        val img1 = createTestImage(100, 100, Color.WHITE)
+        val img2 = createTestImage(100, 100, Color.WHITE)
+
+        // A step-2 sampling grid (checking only even x/y) would skip this pixel entirely, since
+        // both coordinates are odd - exactly the gap that let hasScreenChanged() report
+        // changed=true while this reported changed_areas=[].
+        img2.setRGB(51, 51, Color.BLACK.rgb)
+
+        val boxes = server.getChangedBoundingBoxes(img2, img1)
+        assertEquals(1, boxes.size, "The single changed pixel should still produce one bounding box")
+    }
+
+    @Test
     fun `test drawHighlight draws the annotation without contaminating the delta baseline`() {
         val server = ScreenshotterServer()
         val baseline = createTestImage(100, 100, Color.WHITE)

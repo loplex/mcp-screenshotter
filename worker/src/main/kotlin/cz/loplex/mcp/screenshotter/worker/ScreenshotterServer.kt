@@ -99,11 +99,20 @@ class ScreenshotterServer(
         val rows = (newImg.height + cellSize - 1) / cellSize
         val grid = Array(rows) { BooleanArray(cols) }
 
-        // 1. Mark changed cells
-        for (y in 0 until newImg.height step 2) {
-            for (x in 0 until newImg.width step 2) {
+        // 1. Mark changed cells. Every pixel gets checked (not just every 2nd one in each
+        // direction, as this used to sample) - hasScreenChanged() diffs every pixel, and sampling
+        // here could disagree with it: a single-pixel change at odd x/y (a blinking cursor, a
+        // thin focus ring) would report changed=true from hasScreenChanged() but changed_areas=[]
+        // from here, since the sampling grid could skip the only pixel that actually changed.
+        // Once a cell is marked, skip re-checking its remaining pixels - still correct (every
+        // pixel was eligible to mark its cell before being skipped), just avoids redundant work.
+        for (y in 0 until newImg.height) {
+            val row = y / cellSize
+            for (x in 0 until newImg.width) {
+                val col = x / cellSize
+                if (grid[row][col]) continue
                 if (newImg.getRGB(x, y) != oldImg.getRGB(x, y)) {
-                    grid[y / cellSize][x / cellSize] = true
+                    grid[row][col] = true
                 }
             }
         }
