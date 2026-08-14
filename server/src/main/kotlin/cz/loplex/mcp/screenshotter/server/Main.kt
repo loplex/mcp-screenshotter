@@ -82,12 +82,31 @@ class SandboxManager {
         // see startWatchdog() for how it detects our death and why.
         startWatchdog()
 
-        // 1. Start the display server (Xephyr or Xvfb, per SCREENSHOTTER_DISPLAY_BACKEND)
+        // 1. Start the display server (Xephyr or Xvfb, per SCREENSHOTTER_DISPLAY_BACKEND).
+        // Display number picked by the server itself via `-displayfd 1`: it finds a free
+        // display, binds to it, and writes the number to fd 1 (stdout, which we keep as a
+        // dedicated pipe for exactly this) only once it's actually ready to accept connections.
+        // That's both race-free (no separate "scan /tmp/.X11-unix, then hope nothing else grabs
+        // the same number before we get there" step - the exact TOCTOU a `findFreeDisplay()`-style
+        // scan is prone to) and self-synchronizing (no fixed `Thread.sleep()` guess for "is it up
+        // yet" - the write itself *is* the readiness signal).
         val backend = DisplayBackend.fromEnv()
-        val displayNum = findFreeDisplay()
+        displayProc = startTracked(displayCommand(backend)) { pb ->
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT) // keep stdout free for -displayfd; let stderr flow through as usual
+        }
+        val displayOut = BufferedReader(InputStreamReader(displayProc!!.inputStream, "UTF-8"))
+        val displayNumLine = displayOut.readLine()?.trim()
+            ?: throw RuntimeException("Failed to read display number from ${backend.processName} via -displayfd.")
+        val displayNum = displayNumLine.toIntOrNull()
+            ?: throw RuntimeException("${backend.processName} -displayfd wrote a non-numeric value: '$displayNumLine'")
         val display = ":$displayNum"
-        displayProc = startTracked(displayCommand(backend, display))
-        Thread.sleep(1000) // Wait for X11 to initialize
+
+        // -displayfd's contract is a single line; nothing else is expected on this pipe, but keep
+        // draining it anyway (same reasoning as the dbus-daemon pipe below) so an unexpected
+        // extra write can never fill the pipe buffer and block the display server.
+        Thread {
+            try { while (displayOut.readLine() != null) { /* discard */ } } catch (ignored: Exception) {}
+        }.start()
 
         System.err.println("${backend.processName} started on $display")
 
@@ -256,10 +275,14 @@ class SandboxManager {
         return workerJar.toAbsolutePath().toString()
     }
 
-    /** Builds the launch command for `backend`; both take the same 1024x768 resolution, just in their own flag syntax. */
-    private fun displayCommand(backend: DisplayBackend, display: String): List<String> = when (backend) {
-        DisplayBackend.XEPHYR -> listOf("Xephyr", "-screen", "1024x768", display)
-        DisplayBackend.XVFB -> listOf("Xvfb", display, "-screen", "0", "1024x768x24")
+    /**
+     * Builds the launch command for `backend`; both take the same 1024x768 resolution and
+     * `-displayfd 1` (report the display number they picked on stdout instead of taking one on
+     * the command line - see the comment in start()), just in their own flag syntax.
+     */
+    private fun displayCommand(backend: DisplayBackend): List<String> = when (backend) {
+        DisplayBackend.XEPHYR -> listOf("Xephyr", "-screen", "1024x768", "-displayfd", "1")
+        DisplayBackend.XVFB -> listOf("Xvfb", "-screen", "0", "1024x768x24", "-displayfd", "1")
     }
 
     /** A fixed, built-in GTK theme/font/icon set, so widget layout and text metrics are the same on every machine. */
@@ -496,15 +519,6 @@ class SandboxManager {
             val sent = if (signal == "KILL") h.destroyForcibly() else h.destroy()
             System.err.println("[closeApp] sent $signal to pid ${h.pid()} (part of group $pgid): $sent")
         }
-    }
-
-    private fun findFreeDisplay(): Int {
-        for (i in 1..99) {
-            if (!File("/tmp/.X11-unix/X$i").exists()) {
-                return i
-            }
-        }
-        return 99
     }
 
     fun stop() {
