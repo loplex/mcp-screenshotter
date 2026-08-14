@@ -167,15 +167,29 @@ class ScreenshotterServer(
      * Useful for visual documentation of what the agent is clicking/interacting with.
      */
     fun takeScreenshotWithHighlight(x: Int, y: Int, width: Int, height: Int): BufferedImage {
-        val image = takeScreenshot(null)
-        
-        // Use Graphics2D to draw the highlight
+        // Deliberately NOT calling updateLastScreenshot() on the annotated result: it has the
+        // highlight baked in, and storing it as the baseline would make the next get_screenshot's
+        // delta comparison see a fake "change" exactly where the highlight was drawn. Leave
+        // lastScreenshot as whatever the most recent real screenshot set it to - drawHighlight()
+        // itself doesn't touch it either, so this holds regardless of how the image was captured.
+        return drawHighlight(takeScreenshot(null), x, y, width, height)
+    }
+
+    /**
+     * Draws a semi-transparent red fill plus a solid red border over `(x, y, width, height)` on
+     * `image`, in place, and returns it.
+     *
+     * Split out from [takeScreenshotWithHighlight] - same reasoning as [cropImage] being split
+     * from [takeScreenshot] - so the annotation logic can be unit-tested against a synthetic
+     * image without a real `Robot`/`DISPLAY` capturing the actual host screen as a side effect.
+     */
+    internal fun drawHighlight(image: BufferedImage, x: Int, y: Int, width: Int, height: Int): BufferedImage {
         val g2d = image.createGraphics()
         try {
             // Draw a semi-transparent red fill
             g2d.color = java.awt.Color(255, 0, 0, 64) // 25% opacity red
             g2d.fillRect(x, y, width, height)
-            
+
             // Draw a solid red border
             g2d.color = java.awt.Color.RED
             g2d.stroke = java.awt.BasicStroke(3f) // 3px border
@@ -183,8 +197,6 @@ class ScreenshotterServer(
         } finally {
             g2d.dispose()
         }
-        
-        updateLastScreenshot(image)
         return image
     }
 

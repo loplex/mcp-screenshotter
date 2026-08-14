@@ -7,6 +7,7 @@ import java.awt.image.BufferedImage
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ScreenshotterServerTest {
 
@@ -83,6 +84,32 @@ class ScreenshotterServerTest {
         assertEquals(img, server.scaleToMaxWidth(img, 0), "non-positive maxWidth is ignored")
         assertEquals(img, server.scaleToMaxWidth(img, 200), "maxWidth >= actual width is a no-op")
         assertEquals(img, server.scaleToMaxWidth(img, 500), "maxWidth larger than the image never upscales")
+    }
+
+    @Test
+    fun `test drawHighlight draws the annotation without contaminating the delta baseline`() {
+        val server = ScreenshotterServer()
+        val baseline = createTestImage(100, 100, Color.WHITE)
+        server.updateLastScreenshot(baseline)
+
+        // A separate captured image (not the baseline itself) gets annotated, the same way
+        // takeScreenshotWithHighlight() feeds it a fresh takeScreenshot(null) result.
+        val captured = createTestImage(100, 100, Color.WHITE)
+        val annotated = server.drawHighlight(captured, 10, 10, 20, 20)
+
+        // The highlight was actually drawn - the border is a fully opaque red stroke (no alpha
+        // blending, unlike the semi-transparent fill), so it should come out as exactly Color.RED.
+        assertEquals(Color.RED.rgb, annotated.getRGB(10, 15), "the box's left border should be solid red")
+        // The fill (25% opacity red over white) blends rather than overwriting outright - just
+        // confirm it moved away from the untouched white background.
+        assertTrue(annotated.getRGB(15, 15) != Color.WHITE.rgb, "the box's interior should show the semi-transparent fill")
+
+        // The regression this guards against (code review #3): drawing a highlight used to also
+        // overwrite lastScreenshot with the annotated image, so the next delta comparison saw a
+        // fake "change" exactly where the highlight was. The stored baseline must still be the
+        // untouched image set via updateLastScreenshot() above, not `annotated`.
+        assertEquals(baseline, server.getLastScreenshot())
+        assertEquals(Color.WHITE.rgb, server.getLastScreenshot()!!.getRGB(15, 15))
     }
 
     private fun createTestImage(width: Int, height: Int, color: Color): BufferedImage {
