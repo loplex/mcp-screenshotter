@@ -1,6 +1,7 @@
 package cz.loplex.mcp.screenshotter.server
 
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.assertEquals
@@ -62,6 +63,43 @@ class SandboxManagerTest {
                 "--bind", "/data/writable", "/mnt/rw"
             ),
             mountArgs
+        )
+    }
+
+    @Test
+    fun `displayResolutionFromEnv defaults to 1024x768 when unset`() {
+        val manager = SandboxManager()
+        assertEquals("1024x768", manager.displayResolutionFromEnv(emptyMap()))
+    }
+
+    @Test
+    fun `displayResolutionFromEnv passes through a valid override`() {
+        val manager = SandboxManager()
+        assertEquals(
+            "1280x800",
+            manager.displayResolutionFromEnv(mapOf("SCREENSHOTTER_DISPLAY_RESOLUTION" to "1280x800"))
+        )
+    }
+
+    @Test
+    fun `displayResolutionFromEnv rejects a malformed override`() {
+        val manager = SandboxManager()
+        val ex = assertThrows<IllegalArgumentException> {
+            manager.displayResolutionFromEnv(mapOf("SCREENSHOTTER_DISPLAY_RESOLUTION" to "not-a-resolution"))
+        }
+        assertTrue(ex.message?.contains("WIDTHxHEIGHT") == true)
+    }
+
+    @Test
+    fun `displayCommand builds Xephyr and Xvfb argument lists using the given resolution`() {
+        val manager = SandboxManager()
+        assertEquals(
+            listOf("Xephyr", "-screen", "1280x800", "-displayfd", "1"),
+            manager.displayCommand(DisplayBackend.XEPHYR, "1280x800")
+        )
+        assertEquals(
+            listOf("Xvfb", "-screen", "0", "1280x800x24", "-displayfd", "1"),
+            manager.displayCommand(DisplayBackend.XVFB, "1280x800")
         )
     }
 

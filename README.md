@@ -77,6 +77,13 @@ SCREENSHOTTER_DISPLAY_BACKEND=xvfb java -jar server/target/screenshotter-server.
 Or, in `claude_desktop_config.json`, add it under the server's `"env"` key (see
 [Usage with Claude Desktop](#usage-with-claude-desktop)).
 
+The sandbox's screen resolution is `1024x768` by default; override it with
+`SCREENSHOTTER_DISPLAY_RESOLUTION` (format `WIDTHxHEIGHT`):
+
+```bash
+SCREENSHOTTER_DISPLAY_RESOLUTION=1280x800 java -jar server/target/screenshotter-server.jar
+```
+
 ## VNC Mirror (optional)
 
 Set `SCREENSHOTTER_VNC_PORT` to also mirror the sandbox display over VNC via `x11vnc` - most
@@ -166,7 +173,7 @@ Add the following configuration to your `claude_desktop_config.json`:
 
 ## Troubleshooting
 
-- **"Cannot connect to X server"**: Ensure `Xephyr` (or `Xvfb`, depending on `SCREENSHOTTER_DISPLAY_BACKEND`) is installed. The orchestrator automatically scans for a free display from `:1` to `:99`.
+- **"Cannot connect to X server"**: Ensure `Xephyr` (or `Xvfb`, depending on `SCREENSHOTTER_DISPLAY_BACKEND`) is installed. The orchestrator doesn't pick a display number itself - it launches the display server with `-displayfd 1` and lets it choose and report back a free one once it's actually ready to accept connections.
 - **"Xephyr fails to start on a headless machine"**: Xephyr needs a host X server to open its window on; it has nothing to attach to over a bare SSH session or on a CI runner. Set `SCREENSHOTTER_DISPLAY_BACKEND=xvfb` instead, which needs no host display at all.
 - **"AT-SPI2 failed"**: If your test application does not export an accessibility tree (like standard Python Tkinter), the server will smoothly fallback to OpenCV for visual bounding boxes. GTK and Qt applications usually support AT-SPI2 natively.
 - **VNC viewer can't connect**: `x11vnc` is started with `-localhost`, so it only listens on `127.0.0.1` on the machine running the server - connect from that same machine, or tunnel to it (e.g. `ssh -L 5900:localhost:5900 host`) if you need it from elsewhere. Also make sure `SCREENSHOTTER_VNC_PORT` is actually set - it's unset (mirror disabled) by default.

@@ -91,7 +91,8 @@ class SandboxManager {
         // scan is prone to) and self-synchronizing (no fixed `Thread.sleep()` guess for "is it up
         // yet" - the write itself *is* the readiness signal).
         val backend = DisplayBackend.fromEnv()
-        displayProc = startTracked(displayCommand(backend)) { pb ->
+        val resolution = displayResolutionFromEnv()
+        displayProc = startTracked(displayCommand(backend, resolution)) { pb ->
             pb.redirectError(ProcessBuilder.Redirect.INHERIT) // keep stdout free for -displayfd; let stderr flow through as usual
         }
         val displayOut = BufferedReader(InputStreamReader(displayProc!!.inputStream, "UTF-8"))
@@ -232,6 +233,22 @@ class SandboxManager {
         Runtime.getRuntime().addShutdownHook(Thread { stop() })
     }
 
+    /**
+     * Selected via SCREENSHOTTER_DISPLAY_RESOLUTION (e.g. "1280x800"); defaults to "1024x768",
+     * matching the resolution this used to have hardcoded in [displayCommand] (see FUTURE_WORK
+     * #10 - this was the last of the three parameters listed there still fixed).
+     */
+    internal fun displayResolutionFromEnv(env: Map<String, String> = System.getenv()): String {
+        val raw = env["SCREENSHOTTER_DISPLAY_RESOLUTION"]?.trim()
+        if (raw.isNullOrEmpty()) return "1024x768"
+        if (!raw.matches(Regex("""\d+x\d+"""))) {
+            throw IllegalArgumentException(
+                "SCREENSHOTTER_DISPLAY_RESOLUTION must be of the form WIDTHxHEIGHT (e.g. '1024x768'), got '$raw'."
+            )
+        }
+        return raw
+    }
+
     /** Selected via SCREENSHOTTER_VNC_PORT; null (the default) means no VNC mirror is started at all. */
     private fun vncPortFromEnv(env: Map<String, String> = System.getenv()): Int? {
         val raw = env["SCREENSHOTTER_VNC_PORT"]?.trim()
@@ -276,13 +293,16 @@ class SandboxManager {
     }
 
     /**
-     * Builds the launch command for `backend`; both take the same 1024x768 resolution and
-     * `-displayfd 1` (report the display number they picked on stdout instead of taking one on
-     * the command line - see the comment in start()), just in their own flag syntax.
+     * Builds the launch command for `backend`; both take the same `resolution` (see
+     * [displayResolutionFromEnv], e.g. "1024x768") and `-displayfd 1` (report the display number
+     * they picked on stdout instead of taking one on the command line - see the comment in
+     * start()), just in their own flag syntax.
      */
-    private fun displayCommand(backend: DisplayBackend): List<String> = when (backend) {
-        DisplayBackend.XEPHYR -> listOf("Xephyr", "-screen", "1024x768", "-displayfd", "1")
-        DisplayBackend.XVFB -> listOf("Xvfb", "-screen", "0", "1024x768x24", "-displayfd", "1")
+    internal fun displayCommand(backend: DisplayBackend, resolution: String): List<String> = when (backend) {
+        DisplayBackend.XEPHYR -> listOf("Xephyr", "-screen", resolution, "-displayfd", "1")
+        // Xvfb additionally wants a color depth suffixed onto the resolution (24-bit here, same
+        // as before this became configurable).
+        DisplayBackend.XVFB -> listOf("Xvfb", "-screen", "0", "${resolution}x24", "-displayfd", "1")
     }
 
     /** A fixed, built-in GTK theme/font/icon set, so widget layout and text metrics are the same on every machine. */
