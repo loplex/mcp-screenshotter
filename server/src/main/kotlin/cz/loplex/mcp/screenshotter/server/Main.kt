@@ -601,7 +601,7 @@ fun main() {
     sandbox.stop()
 }
 
-private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
+internal fun handleMethod(method: String, params: Map<String, Any>?): Any? {
     val mapper = jacksonObjectMapper()
     return when (method) {
         "initialize" -> {
@@ -892,7 +892,11 @@ private fun handleMethod(method: String, params: Map<String, Any>?): Any? {
                     } else {
                         @Suppress("UNCHECKED_CAST")
                         val mounts = (arguments?.get("mounts") as? List<Map<String, Any>> ?: emptyList()).map { m ->
-                            val hostPath = m["host_path"] as String
+                            // Required per the tool's own schema, but never enforced - a missing
+                            // (or wrong-typed) host_path used to surface as a bare
+                            // ClassCastException via the catch-all below instead of this message.
+                            val hostPath = m["host_path"] as? String
+                                ?: throw IllegalArgumentException("mounts[].host_path is required and must be a string.")
                             Mount(
                                 hostPath = hostPath,
                                 sandboxPath = (m["sandbox_path"] as? String) ?: hostPath,
