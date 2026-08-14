@@ -60,7 +60,13 @@ fun main(args: Array<String>) {
                             response["changed"] = false
                             response["changedAreas"] = changedBoxes
                         } else {
-                            val finalImg = if (cropRect != null) serverLogic.takeScreenshot(cropRect) else fullImg
+                            // Crop fullImg directly rather than taking a second screenshot: a
+                            // fresh takeScreenshot(cropRect) call here would capture a separate,
+                            // later moment in time than the one changedBoxes was just computed
+                            // against, so on an animated screen the two could disagree - the
+                            // changed-areas the client received wouldn't reliably describe the
+                            // image it was looking at.
+                            val finalImg = if (cropRect != null) serverLogic.cropImage(fullImg, cropRect) else fullImg
                             response["changed"] = true
                             response["imageB64"] = serverLogic.imageToBase64(serverLogic.scaleToMaxWidth(finalImg, maxWidth))
                             response["changedAreas"] = changedBoxes

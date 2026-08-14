@@ -103,6 +103,22 @@ class ScreenshotterServerTest {
     }
 
     @Test
+    fun `test cropImage crops an already-captured image without recapturing`() {
+        val server = ScreenshotterServer()
+        val img = createTestImage(100, 100, Color.WHITE)
+        val g = img.createGraphics()
+        g.color = Color.BLACK
+        g.fillRect(40, 40, 20, 20)
+        g.dispose()
+
+        val cropped = server.cropImage(img, Rectangle(40, 40, 20, 20))
+
+        assertEquals(20, cropped.width)
+        assertEquals(20, cropped.height)
+        assertEquals(Color.BLACK.rgb, cropped.getRGB(0, 0))
+    }
+
+    @Test
     fun `test drawHighlight draws the annotation without contaminating the delta baseline`() {
         val server = ScreenshotterServer()
         val baseline = createTestImage(100, 100, Color.WHITE)

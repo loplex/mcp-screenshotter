@@ -48,12 +48,24 @@ class ScreenshotterServer(
         val fullRect = Rectangle(screenSize)
         val fullImage = robot.createScreenCapture(fullRect)
 
-        return if (cropRect != null) {
-            val safe = clampCropRect(cropRect, fullImage.width, fullImage.height)
-            fullImage.getSubimage(safe.x, safe.y, safe.width, safe.height)
-        } else {
-            fullImage
-        }
+        return if (cropRect != null) cropImage(fullImage, cropRect) else fullImage
+    }
+
+    /**
+     * Crops `img` to `cropRect`, clamping it to `img`'s actual bounds first (see
+     * [clampCropRect]'s doc comment).
+     *
+     * Split out from [takeScreenshot] so a caller that already has a captured image in hand -
+     * e.g. WorkerMain's `takeScreenshot` action, which needs a cropped view of the *exact same*
+     * capture its delta comparison ran against - can crop it directly instead of calling
+     * [takeScreenshot] a second time. That second call used to take its own fresh screen capture,
+     * a separate moment in time from the one the deltas were computed against; on an animated
+     * screen the two could disagree, so the changed-areas the client received didn't reliably
+     * describe the image it was looking at.
+     */
+    fun cropImage(img: BufferedImage, cropRect: Rectangle): BufferedImage {
+        val safe = clampCropRect(cropRect, img.width, img.height)
+        return img.getSubimage(safe.x, safe.y, safe.width, safe.height)
     }
 
     /**
