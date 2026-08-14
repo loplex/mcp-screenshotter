@@ -74,6 +74,10 @@ class VisionFallback {
                     "height" to rect.height
                 ))
             }
+            // findContours() hands back native-backed MatOfPoint objects that Mat.release() below
+            // never touches - each one needs releasing individually, or every detect_ui_elements
+            // call leaks the native memory behind whichever contours it found.
+            contour.release()
         }
 
         src.release()
