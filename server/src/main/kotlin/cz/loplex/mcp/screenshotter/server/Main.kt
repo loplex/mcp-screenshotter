@@ -416,7 +416,7 @@ class SandboxManager {
     }
 
     /** Reads the process group ID (field 5 of `/proc/<pid>/stat`) of a still-running process, or null. */
-    private fun readProcessGroupId(pid: Long): Long? {
+    internal fun readProcessGroupId(pid: Long): Long? {
         return try {
             val stat = File("/proc/$pid/stat").readText()
             // `comm` (2nd field) is wrapped in parens and may itself contain spaces/parens, so
@@ -462,7 +462,7 @@ class SandboxManager {
      * read-only so the app can actually run; only the real HOME is shadowed, and only our own
      * synthetic sandboxHome (holding the pinned GTK settings) is writable on top of that.
      */
-    private fun bwrapCommand(command: String, mounts: List<Mount>): List<String> {
+    internal fun bwrapCommand(command: String, mounts: List<Mount>): List<String> {
         val realHome = System.getenv("HOME") ?: "/tmp"
         // The server's own working directory (this repo, typically) is very often *under* the
         // real HOME (e.g. ~/projects/foo) and launch_app commands routinely reference it via
