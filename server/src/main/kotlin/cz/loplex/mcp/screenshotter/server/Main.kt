@@ -325,21 +325,27 @@ class SandboxManager {
      * required. The watchdog's read() then returns EOF, and it cleans up on its own.
      */
     private fun startWatchdog() {
-        // Same safety limit as safeDeleteRecursively(): only remove sandboxHome if it still looks
-        // like the handful of files we ourselves wrote there, not blindly `rm -rf` whatever is at
-        // that path by the time we crash.
+        // Same safety check as safeDeleteRecursively(): only remove sandboxHome if it's still
+        // unmistakably one of our own (a direct child of the temp dir named
+        // mcp-screenshotter-home-*), not blindly `rm -rf` whatever is at that path by the time we
+        // crash. See safeDeleteRecursively()'s doc comment for why this checks identity rather
+        // than counting entries.
+        val tmpDir = System.getProperty("java.io.tmpdir")
         val script = """
             cat >/dev/null
             while IFS= read -r pgid; do
                 [ -n "${'$'}pgid" ] && kill -TERM -"${'$'}pgid" 2>/dev/null
             done < "${pgidRegistryFile.absolutePath}"
             rm -f "${pgidRegistryFile.absolutePath}"
-            entries="${'$'}(find "${sandboxHome.absolutePath}" 2>/dev/null | wc -l)"
-            if [ "${'$'}entries" -le 100 ]; then
-                rm -rf "${sandboxHome.absolutePath}"
-            else
-                echo "Refusing to delete ${sandboxHome.absolutePath}: it contains ${'$'}entries entries (> 100 safety limit)." >&2
-            fi
+            sandbox_home="${sandboxHome.absolutePath}"
+            case "${'$'}sandbox_home" in
+                "$tmpDir"/mcp-screenshotter-home-*)
+                    rm -rf "${'$'}sandbox_home"
+                    ;;
+                *)
+                    echo "Refusing to delete ${'$'}sandbox_home: doesn't look like one of our own sandbox home directories." >&2
+                    ;;
+            esac
         """.trimIndent()
         watchdogProc = ProcessBuilder("sh", "-c", script).start()
     }
@@ -536,19 +542,27 @@ class SandboxManager {
     }
 
     /**
-     * Recursively deletes `dir`, but refuses - logging an error and deleting nothing - if it
-     * contains more than `maxEntries` files/directories. `sandboxHome` should only ever hold the
-     * handful of files we ourselves wrote (settings.ini, maybe a GTK cache dir), so a count this
-     * high means something unexpected is going on (e.g. a future bug pointing this at the wrong
-     * path) and blind recursive deletion is the wrong response to that.
+     * Recursively deletes `dir`, but refuses - logging an error and deleting nothing - unless it's
+     * unmistakably one of our own sandbox home directories: a direct child of the system temp
+     * directory whose name starts with the same prefix [sandboxHome] itself is created with.
+     *
+     * This used to gate on a file *count* (refusing above 100 entries) instead, on the theory that
+     * `sandboxHome` should only ever hold a handful of files. That was wrong in practice: it's a
+     * writable HOME for *every* `launch_app`'d process, and an ordinary GTK/Qt app routinely
+     * dumps icon-cache/fontconfig-cache/similar well past 100 files into it within seconds - a
+     * high count there is normal, not a sign that this call is pointed at the wrong path. Checking
+     * *identity* (is this really one of ours?) instead of *size* catches the actual failure mode
+     * this guards against - a future bug reassigning `dir` to something broader, like the real
+     * HOME - without ever refusing a legitimate cleanup.
      */
-    private fun safeDeleteRecursively(dir: File, maxEntries: Int = 100) {
+    internal fun safeDeleteRecursively(dir: File) {
         if (!dir.exists()) return
-        val entries = dir.walkTopDown().count()
-        if (entries > maxEntries) {
+        val tmpDir = File(System.getProperty("java.io.tmpdir"))
+        val looksLikeOurs = dir.parentFile == tmpDir && dir.name.startsWith("mcp-screenshotter-home-")
+        if (!looksLikeOurs) {
             System.err.println(
-                "Refusing to delete $dir: it contains $entries entries (> $maxEntries safety limit), " +
-                    "which is far more than the sandbox itself ever writes there. Leaving it in place - " +
+                "Refusing to delete $dir: doesn't look like one of our own sandbox home directories " +
+                    "(expected a child of $tmpDir named mcp-screenshotter-home-*). Leaving it in place - " +
                     "please inspect and remove it manually."
             )
             return
