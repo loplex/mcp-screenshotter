@@ -45,7 +45,7 @@ MCP Screenshotter allows an AI (like Claude) to safely run, observe, and interac
 - **Xephyr** (`xserver-xephyr`) and/or **Xvfb** (`xvfb`) - at least one of the two, see [Display Backend](#display-backend)
 - **D-Bus** (`dbus-x11`)
 - **AT-SPI2** (`at-spi2-core`)
-- **Bubblewrap** (`bubblewrap`) - used by `launch_app` to sandbox the launched command's mount namespace
+- **Bubblewrap** (`bubblewrap`) - used by `launch_app` to sandbox the launched command's mount namespace, see [Security Considerations](#security-considerations)
 - **x11vnc** (`x11vnc`) - optional, only needed for the [VNC mirror](#vnc-mirror-optional)
 - **Python 3**, **PyGObject** (`python3-gi`) & **GTK 3** (`gir1.2-gtk-3.0`) - for running the E2E test app's sample GTK application
 
@@ -54,6 +54,35 @@ On Debian/Ubuntu:
 sudo apt update
 sudo apt install xserver-xephyr xvfb dbus-x11 at-spi2-core bubblewrap x11vnc python3-gi gir1.2-gtk-3.0
 ```
+
+## Security Considerations
+
+**This is isolation for convenience, not a security boundary against an adversarial command.**
+`launch_app` executes an arbitrary shell command, and that command only runs inside a `bwrap`
+(bubblewrap) **mount namespace** - nothing more:
+
+- The real filesystem is bound read-only at `/`, so anything readable by the user running the
+  server (source, dotfiles, credentials, other projects) is readable by the launched command too.
+  Only the real `$HOME` is hidden (shadowed with an empty `tmpfs`) and replaced with a synthetic
+  sandbox home plus whatever paths the caller explicitly passes via `mounts` - see
+  [`bwrapCommand`](server/src/main/kotlin/cz/loplex/mcp/screenshotter/server/Main.kt).
+- There is **no network namespace isolation** - the launched command has the same network access
+  as the user running the server.
+- There is **no PID namespace isolation** - the launched command shares the host's process
+  namespace with everything else the user can see and (subject to normal Unix permissions) signal.
+- There is no seccomp filtering, user namespace remapping, or cgroup resource capping.
+
+In short: treat this server as running commands **with the same privileges as the user who started
+it**, sandboxed only enough to keep an app from accidentally reading or clobbering the real `$HOME`.
+Do not run it against untrusted or adversarial input (a model you don't control, a prompt an
+untrusted third party can influence, a website/GUI app whose content could feed instructions back
+to the AI - a form of prompt injection) expecting it to contain anything malicious, and don't run
+it on a shared/multi-user machine under the assumption that other users' data is out of reach.
+
+For debugging `close_app`/shutdown behavior without any risk of a real signal reaching the wrong
+process, see `SCREENSHOTTER_DRY_RUN_KILL` in [Worker Memory Limits](#worker-memory-limits) below.
+The [VNC mirror](#vnc-mirror-optional), when enabled, only binds to `127.0.0.1` by default - see
+that section for what it takes to expose it beyond the local machine.
 
 ## Display Backend
 
