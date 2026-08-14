@@ -116,6 +116,18 @@ For debugging `close_app`/shutdown targeting without any risk of an actual kill 
 somewhere unintended, set `SCREENSHOTTER_DRY_RUN_KILL` (any non-empty value) - every `kill`
 `SandboxManager` would otherwise run is logged to stderr instead of actually sent.
 
+## Debug Logging
+
+Both `server` and `worker` stay quiet by default beyond their normal lifecycle/error output. Set
+`SCREENSHOTTER_DEBUG` (any non-empty value) to also print purely diagnostic chatter to stderr -
+e.g. per-call `close_app`/`kill(2)` results, or AT-SPI desktop-tree enumeration - prefixed
+`[DEBUG]`. Off by default so normal runs aren't noisy; genuine lifecycle events and errors are
+always printed regardless of this flag.
+
+```bash
+SCREENSHOTTER_DEBUG=1 java -jar server/target/screenshotter-server.jar
+```
+
 ## Build and Run
 
 1. **Compile and Package:**

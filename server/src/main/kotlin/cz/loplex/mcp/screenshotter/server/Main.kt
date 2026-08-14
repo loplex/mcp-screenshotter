@@ -566,13 +566,13 @@ class SandboxManager {
         // signal here.
         val result = LibCExt.INSTANCE.kill(-pgid, signalNumber)
         if (result == 0) {
-            System.err.println("[closeApp] sent $signal to process group $pgid via kill(2)")
+            debugLog("[closeApp] sent $signal to process group $pgid via kill(2)")
         } else {
             // A non-zero result here almost always means ESRCH: the group is already gone by the
             // time we got here (e.g. the app exited on its own between eviction and this call) -
             // this call was always racing whatever else might tear the group down, not a real
             // failure worth surfacing as one.
-            System.err.println("[closeApp] kill(-$pgid, $signal) returned $result (group likely already gone)")
+            debugLog("[closeApp] kill(-$pgid, $signal) returned $result (group likely already gone)")
         }
     }
 
