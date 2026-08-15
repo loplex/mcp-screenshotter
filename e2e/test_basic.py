@@ -2,6 +2,13 @@
 import subprocess
 import json
 import os
+import select
+
+# Bounds every request/response round trip so a server/worker that never replies (e.g. the
+# NoClassDefFoundError regression that once made detect_ui_elements hang instead of erroring -
+# see VisionFallback's lazy OpenCV load) fails this test in seconds instead of hanging the whole
+# CI job for hours.
+RESPONSE_TIMEOUT_SECONDS = 30.0
 
 def send_request(proc, method, params=None, req_id=1):
     req = {
@@ -11,12 +18,15 @@ def send_request(proc, method, params=None, req_id=1):
     }
     if params is not None:
         req["params"] = params
-    
+
     msg = json.dumps(req)
     proc.stdin.write(msg + "\n")
     proc.stdin.flush()
-    
+
     # Read response
+    ready, _, _ = select.select([proc.stdout], [], [], RESPONSE_TIMEOUT_SECONDS)
+    if not ready:
+        raise Exception(f"Timed out after {RESPONSE_TIMEOUT_SECONDS}s waiting for a response to '{method}'")
     line = proc.stdout.readline()
     if not line:
         raise Exception("Server closed unexpectedly")
@@ -87,7 +97,11 @@ def test_mcp_server():
         raise
     finally:
         proc.terminate()
-        proc.wait()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 if __name__ == "__main__":
     test_mcp_server()

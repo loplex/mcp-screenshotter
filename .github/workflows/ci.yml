@@ -26,6 +26,12 @@ jobs:
     name: E2E (GUI sandbox)
     runs-on: ubuntu-latest
     needs: build-and-test
+    # Backstop for a hang the e2e scripts' own per-request read timeouts don't cover (e.g. a
+    # hang outside send_request, or a future regression that reintroduces one) - a normal run
+    # takes well under a minute, so this only ever fires when something is actually stuck,
+    # not on ordinary slowness. Without it, a hang burns the default 360-minute job timeout
+    # (see the ~1h44m stuck run that prompted this).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 

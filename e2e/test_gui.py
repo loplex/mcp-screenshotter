@@ -5,6 +5,13 @@ import sys
 import time
 import os
 import base64
+import select
+
+# Bounds every request/response round trip so a server/worker that never replies (e.g. the
+# NoClassDefFoundError regression that once made detect_ui_elements hang instead of erroring -
+# see VisionFallback's lazy OpenCV load) fails this test in seconds instead of hanging the whole
+# CI job for hours.
+RESPONSE_TIMEOUT_SECONDS = 30.0
 
 def send_request(proc, method, params=None, req_id=1):
     req = {
@@ -19,6 +26,9 @@ def send_request(proc, method, params=None, req_id=1):
     proc.stdin.write(msg + "\n")
     proc.stdin.flush()
 
+    ready, _, _ = select.select([proc.stdout], [], [], RESPONSE_TIMEOUT_SECONDS)
+    if not ready:
+        raise Exception(f"Timed out after {RESPONSE_TIMEOUT_SECONDS}s waiting for a response to '{method}'")
     line = proc.stdout.readline()
     if not line:
         raise Exception("Server closed unexpectedly")
@@ -215,13 +225,19 @@ def test_gui_scenario():
     finally:
         mcp_proc.terminate()
         try:
+            mcp_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            mcp_proc.kill()
+            mcp_proc.wait()
+        # Read only after the process is confirmed dead, so this can't itself hang waiting for
+        # EOF on a still-open pipe if terminate() alone didn't stop it in time.
+        try:
             err_output = mcp_proc.stderr.read()
             if err_output:
                 print("\nServer STDERR Output:")
                 print(err_output)
-        except:
+        except Exception:
             pass
-        mcp_proc.wait()
 
 if __name__ == "__main__":
     test_gui_scenario()

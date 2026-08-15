@@ -16,6 +16,13 @@ import subprocess
 import json
 import time
 import os
+import select
+
+# Bounds every request/response round trip so a server/worker that never replies (e.g. the
+# NoClassDefFoundError regression that once made detect_ui_elements hang instead of erroring -
+# see VisionFallback's lazy OpenCV load) fails this test in seconds instead of hanging the whole
+# CI job for hours.
+RESPONSE_TIMEOUT_SECONDS = 30.0
 
 def send_request(proc, method, params=None, req_id=1):
     req = {"jsonrpc": "2.0", "id": req_id, "method": method}
@@ -23,6 +30,9 @@ def send_request(proc, method, params=None, req_id=1):
         req["params"] = params
     proc.stdin.write(json.dumps(req) + "\n")
     proc.stdin.flush()
+    ready, _, _ = select.select([proc.stdout], [], [], RESPONSE_TIMEOUT_SECONDS)
+    if not ready:
+        raise Exception(f"Timed out after {RESPONSE_TIMEOUT_SECONDS}s waiting for a response to '{method}'")
     line = proc.stdout.readline()
     if not line:
         raise Exception("Server closed unexpectedly")
@@ -124,7 +134,11 @@ def test_vision_scenario():
         raise
     finally:
         mcp_proc.terminate()
-        mcp_proc.wait()
+        try:
+            mcp_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            mcp_proc.kill()
+            mcp_proc.wait()
 
 if __name__ == "__main__":
     test_vision_scenario()
