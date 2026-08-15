@@ -187,11 +187,14 @@ bundle (one per supported architecture) on the
    `SCREENSHOTTER_WORKER_JAR=/path/to/mcp-screenshotter-worker.jar`.
 
 2. **Run E2E Tests:**
-   A full GUI end-to-end test is provided, which spins up the MCP server, launches a Python test application, finds a button using OpenCV/AT-SPI2, clicks it, and verifies the screenshot.
+   A full suite of GUI end-to-end tests is provided under `e2e/`, each spinning up its own MCP
+   server against a Python test application (launching apps, driving them via OpenCV/AT-SPI2,
+   taking screenshots, managing multiple windows, and so on). Run all of them with:
    ```bash
-   python3 e2e/test_gui.py
+   ./e2e/run_all.sh
    ```
-   The resulting screenshot will be saved to `e2e/output/final_screenshot.png`.
+   Individual scenarios can still be run directly, e.g. `python3 e2e/test_gui.py`, whose final
+   screenshot is saved to `e2e/output/final_screenshot.png`.
 
 ## Available MCP Tools
 

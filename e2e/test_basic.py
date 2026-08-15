@@ -27,8 +27,7 @@ def test_mcp_server():
     
     jar_path = "packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar"
     if not os.path.exists(jar_path):
-        print(f"ERROR: {jar_path} not found. Run 'mvn package' first.")
-        return
+        raise FileNotFoundError(f"{jar_path} not found. Run 'mvn package' first.")
         
     # Start the server (inherits DISPLAY from current environment)
     proc = subprocess.Popen(
@@ -85,6 +84,7 @@ def test_mcp_server():
         # Print stderr from Java server for debugging
         print("\nServer STDERR Output:")
         print(proc.stderr.read())
+        raise
     finally:
         proc.terminate()
         proc.wait()

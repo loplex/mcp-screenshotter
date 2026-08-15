@@ -127,8 +127,7 @@ def test_gui_scenario():
 
     jar_path = "packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar"
     if not os.path.exists(jar_path):
-        print(f"ERROR: {jar_path} not found. Run 'mvn package' first.")
-        return
+        raise FileNotFoundError(f"{jar_path} not found. Run 'mvn package' first.")
 
     print("\n2. Starting MCP Server (which will manage Xephyr, DBus, and Worker via HTTP)...")
     mcp_proc = subprocess.Popen(

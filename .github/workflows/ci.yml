@@ -51,11 +51,11 @@ jobs:
       - name: Package (skip tests, already run in build-and-test)
         run: mvn -B clean package -DskipTests
 
-      - name: Run E2E test
+      - name: Run E2E tests
         env:
           SCREENSHOTTER_DISPLAY_BACKEND: xvfb
           SCREENSHOTTER_DEBUG: "1"
-        run: python3 e2e/test_gui.py
+        run: ./e2e/run_all.sh
 
       - name: Upload final screenshot
         if: always()

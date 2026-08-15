@@ -70,8 +70,7 @@ def test_vision_scenario():
 
     jar_path = "packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar"
     if not os.path.exists(jar_path):
-        print(f"ERROR: {jar_path} not found. Run 'mvn package' first.")
-        return
+        raise FileNotFoundError(f"{jar_path} not found. Run 'mvn package' first.")
 
     print("\n1. Starting MCP Server (which will manage the display server, DBus, and Worker via HTTP)...")
     mcp_proc = subprocess.Popen(
