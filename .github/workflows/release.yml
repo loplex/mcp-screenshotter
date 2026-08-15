@@ -98,6 +98,9 @@ jobs:
     # Without it, this job runs immediately after `build`, same as before.
     environment: release
     steps:
+      # gh release create needs .git metadata to infer which repo to publish to.
+      - uses: actions/checkout@v5
+
       # Both matrix legs' artifacts (one per arch) land in this one directory, flattened -
       # merge-multiple avoids nesting each under its own artifact-name subdirectory.
       - name: Download bundle artifacts
