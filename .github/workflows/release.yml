@@ -24,11 +24,27 @@ jobs:
           java-version: '17'
           cache: maven
 
+      # pom.xml pins project.build.outputTimestamp to ${git.commit.time}, populated by
+      # git-commit-id-maven-plugin's initialize-phase execution - but that only happens inside a
+      # normal lifecycle build. versions-maven-plugin:set below is invoked as a bare goal, which
+      # never runs that plugin, so ${git.commit.time} is unresolved at that point; versions:set
+      # then rewrites pom.xml with whatever it resolved to, freezing the *wall-clock time of this
+      # step* into project.build.outputTimestamp instead of the commit time. Since the two matrix
+      # legs run this step at slightly different real moments, each freezes a different value,
+      # making every archive entry - and so server.jar/worker.jar themselves - byte-different
+      # between the two release artifacts despite identical decompressed content. Computing it
+      # once here via plain `git log` and passing it explicitly to both mvn invocations below
+      # sidesteps versions:set's rewrite entirely: both legs build the same tag/commit, so both
+      # get the exact same value.
+      - name: Resolve reproducible-build timestamp from the last commit
+        run: echo "SOURCE_DATE=$(git log -1 --format=%cI)" >> "$GITHUB_ENV"
+
       - name: Set project version from tag
         run: |
           version="${GITHUB_REF_NAME#v}"
           mvn -B org.codehaus.mojo:versions-maven-plugin:set \
-            -DnewVersion="${version}" -DgenerateBackupPoms=false
+            -DnewVersion="${version}" -DgenerateBackupPoms=false \
+            -Dproject.build.outputTimestamp="${SOURCE_DATE}"
 
       # The packaging module's assembly (see packaging/pom.xml) already produces the flat-layout
       # release bundle as part of the ordinary Maven build: both jars side by side under their
@@ -45,7 +61,9 @@ jobs:
       # >100MB of Windows/macOS/other-arch native code nu.pattern.OpenCV.loadLocally() can never
       # load on this JVM.
       - name: Build (skip tests, already covered by CI on main)
-        run: mvn -B clean package -DskipTests -Plinux-${{ matrix.arch }}
+        run: |
+          mvn -B clean package -DskipTests -Plinux-${{ matrix.arch }} \
+            -Dproject.build.outputTimestamp="${SOURCE_DATE}"
 
       # Maven's output is deliberately version- and arch-agnostic (packaging/pom.xml) - this step
       # is the only place that knows the tag and which arch this matrix leg just built, so it

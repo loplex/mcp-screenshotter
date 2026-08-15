@@ -13,6 +13,22 @@
         <maven.compiler.target>17</maven.compiler.target>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
 
+        <!-- Reproducible Builds (https://maven.apache.org/guides/mini/guide-reproducible-builds.html):
+             maven-jar-plugin/maven-resources-plugin stamp every archive entry they write with the
+             wall-clock time of the build instead of anything tied to the source, so two builds of
+             the exact same commit - e.g. the release workflow's x86_64/aarch64 matrix legs, which
+             build server.jar and worker.jar from identical, arch-independent source - end up
+             byte-different despite having byte-identical decompressed content. Pinning this
+             property makes every archive-producing plugin below use it instead, so identical
+             sources always produce identical jars regardless of when/where they're built. Set to
+             the last commit's timestamp (via git-commit-id-maven-plugin below, per the guide above)
+             rather than a hardcoded date, so it moves forward on its own as the repo changes
+             instead of needing a manual bump; it still stays fixed for any given commit, which is
+             all reproducibility across the two matrix legs actually requires - both legs build the
+             same tag. -->
+        <project.build.outputTimestamp>&#36;{git.commit.time}</project.build.outputTimestamp>
+
+        <git-commit-id-maven-plugin.version>10.0.0</git-commit-id-maven-plugin.version>
         <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
         <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
@@ -166,5 +182,36 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <!-- Real (inherited) plugin, not pluginManagement - Maven inherits actual <plugins>
+             entries from a parent into every child module's own build, so this runs once per
+             module (root, server, worker, packaging), each resolving the same commit's timestamp
+             independently, rather than needing to be repeated in every module's own pom.xml. Bound
+             to its default "initialize" phase, well before any module's "package"-phase
+             maven-jar-plugin execution reads project.build.outputTimestamp above, so git.commit.time
+             is already populated by the time it's needed. dateFormat is overridden because the
+             plugin's own default ("yyyy-MM-dd'T'HH:mm:ssZ", e.g. "+0100") isn't the ISO-8601 variant
+             ("+01:00"/"Z") Maven's outputTimestamp parser accepts - see
+             https://github.com/git-commit-id/git-commit-id-maven-plugin/issues/674. -->
+        <plugins>
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>${git-commit-id-maven-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>get-git-commit-time</id>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <dateFormat>yyyy-MM-dd'T'HH:mm:ssXXX</dateFormat>
+                    <dateFormatTimeZone>UTC</dateFormatTimeZone>
+                    <generateGitPropertiesFile>false</generateGitPropertiesFile>
+                </configuration>
+            </plugin>
+        </plugins>
     </build>
 </project>
