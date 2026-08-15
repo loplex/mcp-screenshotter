@@ -169,6 +169,14 @@ class SandboxManager {
             "GSETTINGS_BACKEND" to "memory", // ignore any ambient dconf database entirely
             "LC_ALL" to "C.UTF-8",
             "PATH" to (System.getenv("PATH") ?: "/usr/bin:/bin")
+        ) + (
+            // Forwarded opt-in, not blanket - unlike the rest of this map, which deliberately
+            // starts from a clean slate (see writeGtkSettings()'s doc comment on why), this one
+            // variable is diagnostic-only and harmless to pass through, and worker's own
+            // debugLog() calls (e.g. AtSpiReader's UI tree scan) would otherwise stay silent
+            // even with SCREENSHOTTER_DEBUG set on the server, since the worker is launched with
+            // this exact map as its *entire* environment.
+            System.getenv("SCREENSHOTTER_DEBUG")?.let { mapOf("SCREENSHOTTER_DEBUG" to it) } ?: emptyMap()
         )
 
         // 3. Start AT-SPI2
