@@ -163,6 +163,12 @@ SCREENSHOTTER_DEBUG=1 java -jar server/target/screenshotter-server.jar
 
 ## Build and Run
 
+**Prebuilt releases:** each tagged version publishes a `screenshotter-mcp-vX.Y.Z.tar.gz` bundle on
+the [Releases page](https://github.com/loplex/mcp-screenshotter/releases), containing both jars
+already laid out under `server/target/` and `worker/target/`. Extract it and run
+`java -jar server/target/screenshotter-server.jar` directly - no Maven build needed. You still
+need a **Java 17+** runtime and the [sandbox runtime dependencies](#requirements) installed.
+
 1. **Compile and Package:**
    ```bash
    mvn clean package -DskipTests

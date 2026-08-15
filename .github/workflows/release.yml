@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Set project version from tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mvn -B org.codehaus.mojo:versions-maven-plugin:set \
+            -DnewVersion="${version}" -DgenerateBackupPoms=false
+
+      - name: Build (skip tests, already covered by CI on main)
+        run: mvn -B clean package -DskipTests
+
+      - name: Assemble distribution bundle
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          bundle="screenshotter-mcp-${tag}"
+
+          # Mirror the server/target + worker/target layout the Maven build produces:
+          # SandboxManager's default worker-jar lookup (Main.kt) resolves
+          # "worker/target/screenshotter-worker.jar" relative to the server jar's own
+          # location, so `java -jar server/target/screenshotter-server.jar` must keep working
+          # straight out of the extracted archive, with no SCREENSHOTTER_WORKER_JAR override.
+          mkdir -p "dist/${bundle}/server/target" "dist/${bundle}/worker/target"
+          cp server/target/screenshotter-server.jar "dist/${bundle}/server/target/"
+          cp worker/target/screenshotter-worker.jar "dist/${bundle}/worker/target/"
+          cp README.md CONTRIBUTING.md LICENSE "dist/${bundle}/"
+
+          tar -czf "${bundle}.tar.gz" -C dist "${bundle}"
+
+      # Uploaded as a plain workflow artifact (downloadable from this run's Actions page for
+      # inspection), NOT published as a GitHub Release yet - that happens in the gated `publish`
+      # job below.
+      - name: Upload bundle as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshotter-mcp-${{ github.ref_name }}
+          path: screenshotter-mcp-${{ github.ref_name }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    # Gate: this job only runs after manual approval, PROVIDED the "release" environment has
+    # "Required reviewers" configured in this repo's Settings -> Environments. That one-time
+    # setup has to be done by hand in the GitHub UI - it can't be done from this workflow file.
+    # Without it, this job runs immediately after `build`, same as before.
+    environment: release
+    steps:
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: screenshotter-mcp-${{ github.ref_name }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "screenshotter-mcp-${GITHUB_REF_NAME}.tar.gz"
