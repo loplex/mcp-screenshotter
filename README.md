@@ -1,5 +1,9 @@
 # MCP Screenshotter
 
+[![CI](https://github.com/loplex/mcp-screenshotter/actions/workflows/ci.yml/badge.svg)](https://github.com/loplex/mcp-screenshotter/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/loplex/mcp-screenshotter)](https://github.com/loplex/mcp-screenshotter/releases)
+[![License](https://img.shields.io/github/license/loplex/mcp-screenshotter)](LICENSE)
+
 A headless Model Context Protocol (MCP) server that provides a completely isolated, sandboxed X11 graphical environment for AI agents to launch and interact with GUI applications without affecting the user's host environment.
 
 ## Overview
