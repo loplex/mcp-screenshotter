@@ -29,18 +29,24 @@ jobs:
 
       # The packaging module's assembly (see packaging/pom.xml) already produces the flat-layout
       # release bundle as part of the ordinary Maven build: both jars side by side under their
-      # fixed runtime names, plus README/CONTRIBUTING/LICENSE, archived with a wrapper directory
-      # at packaging/target/mcp-screenshotter.tar.gz. SandboxManager's worker-jar lookup (Main.kt,
-      # resolveWorkerJar) checks for "mcp-screenshotter-worker.jar" next to its own jar first, so
-      # `java -jar mcp-screenshotter-server.jar` works straight out of the extracted archive, with
-      # no SCREENSHOTTER_WORKER_JAR override.
+      # fixed runtime names, plus README/CONTRIBUTING/LICENSE, exploded (no archive, no wrapper
+      # directory) at packaging/target/mcp-screenshotter/. SandboxManager's worker-jar lookup
+      # (Main.kt, resolveWorkerJar) checks for "mcp-screenshotter-worker.jar" next to its own jar
+      # first, so `java -jar mcp-screenshotter-server.jar` works straight out of that directory
+      # (or the tar.gz built from it below, once extracted), with no SCREENSHOTTER_WORKER_JAR
+      # override.
       - name: Build (skip tests, already covered by CI on main)
         run: mvn -B clean package -DskipTests
 
-      # Maven's output is deliberately version-agnostic (packaging/pom.xml) - this just gives it
-      # the public, tag-versioned asset name for upload. No other assembly happens here.
-      - name: Name release asset after the tag
-        run: cp packaging/target/mcp-screenshotter.tar.gz "mcp-screenshotter-${GITHUB_REF_NAME}.tar.gz"
+      # Maven's output is deliberately version-agnostic (packaging/pom.xml) - this step is the
+      # only place that knows the tag, so it builds the actual public archive from the exploded
+      # output: a wrapper directory (so extracting it doesn't dump files into wherever the user
+      # is) named after the tag, matching the convention users expect (e.g.
+      # tar -xzf mcp-screenshotter-v0.2.0.tar.gz -> a mcp-screenshotter-v0.2.0/ directory).
+      - name: Build release asset named after the tag
+        run: |
+          cp -r packaging/target/mcp-screenshotter "packaging/target/mcp-screenshotter-${GITHUB_REF_NAME}"
+          tar -czf "mcp-screenshotter-${GITHUB_REF_NAME}.tar.gz" -C packaging/target "mcp-screenshotter-${GITHUB_REF_NAME}"
 
       # Uploaded as a plain workflow artifact (downloadable from this run's Actions page for
       # inspection), NOT published as a GitHub Release yet - that happens in the gated `publish`
