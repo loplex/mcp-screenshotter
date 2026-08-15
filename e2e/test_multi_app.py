@@ -33,6 +33,22 @@ def list_windows(proc, req_id):
     res = call_tool(proc, "list_windows", req_id=req_id)
     return json.loads(res["result"]["content"][0]["text"])["windows"]
 
+def wait_for_windows(proc, req_id, predicate, description, timeout=15.0, interval=0.5):
+    """
+    Polls list_windows until `predicate(windows)` is truthy, instead of guessing a fixed sleep
+    duration for "both apps have created their windows" - same fix as test_gui.py's
+    wait_for_node() for AT-SPI2 (which flaked in CI on a blind sleep), just against
+    list_windows instead of get_ui_tree. Returns (windows, next_req_id).
+    """
+    deadline = time.time() + timeout
+    windows = []
+    while time.time() < deadline:
+        windows = list_windows(proc, req_id); req_id += 1
+        if predicate(windows):
+            return windows, req_id
+        time.sleep(interval)
+    raise Exception(f"Timed out after {timeout}s waiting for {description} (last saw: {windows})")
+
 def test_multi_app_scenario():
     print("=== Starting Multi-App Session Management E2E Test ===")
 
@@ -63,12 +79,13 @@ def test_multi_app_scenario():
         print(f"   launch_app PIDs: {pid1}, {pid2}")
         assert pid1 != pid2, "Each launch_app call should get its own PID"
 
-        time.sleep(3)
-
         print("\n3. Calling 'list_windows' and correlating windows back to launch_app PIDs...")
-        windows = list_windows(mcp_proc, req_id); req_id += 1
+        windows, req_id = wait_for_windows(
+            mcp_proc, req_id,
+            lambda ws: len(ws) == 2,
+            "both apps' windows to appear",
+        )
         print(f"   {len(windows)} window(s) reported: {windows}")
-        assert len(windows) == 2, f"Expected 2 top-level windows, saw {len(windows)}"
         launched_pids = {w["launched_pid"] for w in windows}
         assert launched_pids == {pid1, pid2}, (
             f"Expected windows' launched_pid to be {{{pid1}, {pid2}}}, got {launched_pids}"

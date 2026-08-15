@@ -62,6 +62,23 @@ def find_first(tree, predicate):
 def find_all(tree, predicate):
     return [node for node in walk(tree) if predicate(node)]
 
+def wait_for_node(proc, req_id, predicate, description, timeout=15.0, interval=0.5):
+    """
+    Polls get_ui_tree until a node matching `predicate` shows up via AT-SPI2, instead of
+    guessing a fixed sleep duration for "the app has rendered and registered itself" - the
+    same class of bug as the blind sleep the AT-SPI2 bus startup itself used to have (see
+    da32570), just one layer up at the launched-app level. Returns (node, next_req_id) so
+    callers can keep threading req_id through like every other call site here.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        tree = get_ui_tree(proc, req_id); req_id += 1
+        node = find_first(tree, predicate)
+        if node is not None:
+            return node, req_id
+        time.sleep(interval)
+    raise Exception(f"Timed out after {timeout}s waiting for {description} via AT-SPI2!")
+
 def center_of(rect):
     return rect["x"] + rect["width"] // 2, rect["y"] + rect["height"] // 2
 
@@ -137,13 +154,12 @@ def test_gui_scenario():
         res = call_tool(mcp_proc, "launch_app", {"command": cmd}, req_id); req_id += 1
         print("Launch Response:", res)
 
-        # Wait for the UI to render properly
-        time.sleep(3)
-
         print("\n3. Switching to the 'Resizable Panes' tab...")
-        ui_tree = get_ui_tree(mcp_proc, req_id); req_id += 1
-        tab_node = find_first(ui_tree, lambda n: n.get("role") == "page tab" and n.get("name") == "Resizable Panes")
-        assert tab_node is not None, "Could not find the 'Resizable Panes' tab via AT-SPI2!"
+        tab_node, req_id = wait_for_node(
+            mcp_proc, req_id,
+            lambda n: n.get("role") == "page tab" and n.get("name") == "Resizable Panes",
+            "the 'Resizable Panes' tab",
+        )
         tab_x, tab_y = center_of(tab_node["rect"])
         call_tool(mcp_proc, "mouse_action", {"action": "click", "x": tab_x, "y": tab_y}, req_id); req_id += 1
         time.sleep(1)
