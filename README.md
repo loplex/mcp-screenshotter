@@ -163,9 +163,10 @@ SCREENSHOTTER_DEBUG=1 java -jar packaging/target/mcp-screenshotter/mcp-screensho
 
 ## Build and Run
 
-**Prebuilt releases:** each tagged version publishes a `mcp-screenshotter-vX.Y.Z.tar.gz` bundle on
-the [Releases page](https://github.com/loplex/mcp-screenshotter/releases), containing both jars
-side by side in the bundle root. Extract it and run
+**Prebuilt releases:** each tagged version publishes a `mcp-screenshotter-vX.Y.Z-linux-<arch>.tar.gz`
+bundle (one per supported architecture) on the
+[Releases page](https://github.com/loplex/mcp-screenshotter/releases), containing both jars and a
+`lib/` directory of their (shared, unmodified) dependencies in the bundle root. Extract it and run
 `java -jar mcp-screenshotter-server.jar` directly - no Maven build needed. You still need a
 **Java 17+** runtime and the [sandbox runtime dependencies](#requirements) installed.
 
@@ -173,13 +174,16 @@ side by side in the bundle root. Extract it and run
    ```bash
    mvn clean package -DskipTests
    ```
-   This produces `packaging/target/mcp-screenshotter/`, a flat directory with both
-   `mcp-screenshotter-server.jar` and `mcp-screenshotter-worker.jar` side by side (see
-   `packaging/pom.xml`) - the same layout the prebuilt release bundle has, just unarchived.
-   Both filenames are fixed (no version, no build-tool-specific suffix) so the orchestrator can
-   find the worker jar - and this doc, the code you're about to run, doesn't need updating on
+   This produces `packaging/target/mcp-screenshotter/`, a flat directory with
+   `mcp-screenshotter-server.jar` and `mcp-screenshotter-worker.jar` side by side, plus their
+   shared dependencies underneath `lib/` (see `packaging/pom.xml`) - the same layout the prebuilt
+   release bundle has, just unarchived. Both jars are thin (no bundled dependencies of their own)
+   and locate `lib/` via a `Class-Path` manifest entry resolved relative to their own location, so
+   the two jars and `lib/` need to stay siblings, wherever you put them.
+   Both jar filenames are fixed (no version, no build-tool-specific suffix) so the orchestrator
+   can find the worker jar - and this doc, the code you're about to run, doesn't need updating on
    every version bump. The orchestrator locates the worker jar next to its own jar; if you've
-   moved it somewhere else, point at it explicitly via
+   moved it (and its `lib/`) somewhere else, point at it explicitly via
    `SCREENSHOTTER_WORKER_JAR=/path/to/mcp-screenshotter-worker.jar`.
 
 2. **Run E2E Tests:**

@@ -13,13 +13,36 @@
         <maven.compiler.target>17</maven.compiler.target>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
 
-        <maven-assembly-plugin.version>3.8.0</maven-assembly-plugin.version>
+        <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
+        <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
+        <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
 
         <kotlin.version>2.4.10</kotlin.version>
         <jackson.version>3.2.0</jackson.version>
         <jna.version>5.14.0</jna.version>
         <opencv.version>4.7.0-0</opencv.version>
         <junit.version>5.10.2</junit.version>
+
+        <!-- org.openpnp:opencv bundles a native library for every OS/arch it supports in one
+             jar (Windows, macOS, and three Linux archs), but this app is Linux-only (see
+             worker/pom.xml's JNA/AT-SPI2/X11 dependencies) and nu.pattern.OpenCV.loadLocally()
+             only ever extracts the one native lib matching the running JVM's os.name/os.arch -
+             the rest is 100% dead weight. packaging/pom.xml unpacks OpenCV through an allowlist
+             (only these two properties, plus its Java API classes) rather than a denylist of
+             unwanted platforms, on purpose: an allowlist fails closed - a future opencv release
+             adding a new platform directory (say, linux/riscv64) is simply not on the list and
+             stays out automatically, where a denylist would let it silently back in. These two
+             properties are that allowlist's only variable part - which Linux arch(es) actually
+             end up in the shipped lib/opencv-*.jar - real paths by default (a plain local
+             `mvn package`, e2e tests, gets both archs and works on either machine); the
+             linux-x86_64/linux-aarch64 profiles below null one of the two out (to
+             "SKIP_NOTHING", which matches no real path in the jar) so a release build ships a
+             single-arch opencv jar instead of a dual-arch one. Declared at the root, not in
+             worker/pom.xml (which owns the actual dependency), because packaging/pom.xml - a
+             sibling module, not worker's descendant - is what references them, and Maven
+             properties aren't visible across sibling modules, only down a parent chain. -->
+        <opencv.include.linuxX86_64>nu/pattern/opencv/linux/x86_64/**</opencv.include.linuxX86_64>
+        <opencv.include.linuxAarch64>nu/pattern/opencv/linux/ARMv8/**</opencv.include.linuxAarch64>
     </properties>
 
     <modules>
@@ -27,6 +50,21 @@
         <module>worker</module>
         <module>packaging</module>
     </modules>
+
+    <profiles>
+        <profile>
+            <id>linux-x86_64</id>
+            <properties>
+                <opencv.include.linuxAarch64>nu/pattern/opencv/SKIP_NOTHING/**</opencv.include.linuxAarch64>
+            </properties>
+        </profile>
+        <profile>
+            <id>linux-aarch64</id>
+            <properties>
+                <opencv.include.linuxX86_64>nu/pattern/opencv/SKIP_NOTHING/**</opencv.include.linuxX86_64>
+            </properties>
+        </profile>
+    </profiles>
 
     <dependencyManagement>
         <dependencies>
@@ -99,43 +137,32 @@
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-assembly-plugin</artifactId>
-                    <version>${maven-assembly-plugin.version}</version>
-                    <executions>
-                        <execution>
-                            <id>make-assembly</id>
-                            <!-- Opt-in, not automatic: "none" here so any module that merely
-                                 references this plugin (e.g. the packaging aggregator, which
-                                 has its own unrelated "make-dist" execution) doesn't
-                                 accidentally inherit this fat-jar assembly too. server/worker
-                                 - the only modules that actually want it - override this back
-                                 to "package" in their own pom.xml.
-                                 Configuration lives here, at the execution level, rather than
-                                 the plugin level, precisely so it stays scoped to this one
-                                 execution and can't leak into a sibling execution some other
-                                 module declares on the same plugin (that's what caused a
-                                 spurious jar-with-dependencies output from the packaging
-                                 module during development of this setup). -->
-                            <phase>none</phase>
-                            <goals>
-                                <goal>single</goal>
-                            </goals>
-                            <configuration>
-                                <descriptorRefs>
-                                    <descriptorRef>jar-with-dependencies</descriptorRef>
-                                </descriptorRefs>
-                                <!-- Drop the version and "-jar-with-dependencies" classifier from
-                                     the output filename (e.g. "mcp-screenshotter-worker.jar"
-                                     instead of
-                                     "mcp-screenshotter-worker-0.2.0-SNAPSHOT-jar-with-dependencies.jar"),
-                                     so code that locates these jars at runtime (Main.kt's
-                                     SandboxManager, the e2e test scripts) never has to know this
-                                     project's version or this plugin's naming convention. -->
-                                <finalName>${project.artifactId}</finalName>
-                                <appendAssemblyId>false</appendAssemblyId>
-                            </configuration>
-                        </execution>
-                    </executions>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>${maven-jar-plugin.version}</version>
+                    <configuration>
+                        <!-- server and worker both ship as thin jars now - their own compiled
+                             classes only, no bundled dependencies - next to a shared lib/
+                             directory of plain (unmodified) dependency jars, assembled by
+                             packaging/pom.xml. addClasspath/classpathPrefix here is what makes
+                             `java -jar mcp-screenshotter-server.jar` still find them: it writes
+                             a Class-Path entry (e.g. "lib/kotlin-stdlib-2.4.10.jar") into
+                             META-INF/MANIFEST.MF for every one of the module's own runtime
+                             dependencies, resolved relative to the jar's own location - not the
+                             process's working directory - so it keeps working no matter where
+                             `java -jar` is invoked from. Each module still supplies its own
+                             mainClass (see server/pom.xml, worker/pom.xml). -->
+                        <archive>
+                            <manifest>
+                                <addClasspath>true</addClasspath>
+                                <classpathPrefix>lib/</classpathPrefix>
+                            </manifest>
+                        </archive>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-dependency-plugin</artifactId>
+                    <version>${maven-dependency-plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>

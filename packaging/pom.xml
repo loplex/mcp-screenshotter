@@ -14,7 +14,8 @@
     <!-- No code of its own - these dependencies exist purely so Maven's reactor (a) builds
          server and worker before this module regardless of <modules> declaration order, and
          (b) resolves them straight from the reactor build, not the local/remote repo, so the
-         assembly below can pull in the actual just-built fat jars. -->
+         copy-dependencies execution below can pull in their actual just-built thin jars and the
+         full, deduplicated union of their runtime dependencies. -->
     <dependencies>
         <dependency>
             <groupId>cz.loplex.mcp</groupId>
@@ -30,75 +31,168 @@
 
     <build>
         <plugins>
+            <!-- server.jar and worker.jar are both thin jars now (see pom.xml pluginManagement's
+                 maven-jar-plugin config) - their own compiled classes only, no bundled
+                 dependencies - so what used to be one assembly unpacking two fat jars side by
+                 side is now four separate, single-purpose steps, all bound to the package phase
+                 (order between the plugins below matters only where one step's output feeds
+                 another - see each execution's own comment): the two thin jars are copied
+                 as-is (fixed names, matching what resolveWorkerJar() in Main.kt expects); every
+                 *other* runtime dependency both modules share is copied as-is too, once, into a
+                 shared lib/ (deduplicated automatically - copying the same groupId:artifactId:
+                 version twice just overwrites the same destination file with itself); OpenCV
+                 alone is special-cased into its own trimmed lib/opencv-*.jar (see the
+                 unpack-opencv-native/repack-opencv-native executions' comments for why); and
+                 README/CONTRIBUTING/LICENSE are copied in alongside. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-assembly-plugin</artifactId>
-                <configuration>
-                    <appendAssemblyId>false</appendAssemblyId>
-                    <!-- Fixed, version-free name on purpose: this is a build-tool-internal
-                         output (e2e tests, local runs, CI reading it straight off disk), not
-                         the versioned public download - so nothing downstream needs to know
-                         this project's version or a git tag to find it. The eventual GitHub
-                         Release asset (both its filename and the wrapper directory inside it)
-                         is built by the CI release step directly from this exploded output. -->
-                    <finalName>mcp-screenshotter</finalName>
-                    <!-- Both jars, flat, side by side - no server/target or worker/target
-                         nesting. Mapped to their fixed runtime names (${artifact.artifactId}.jar)
-                         rather than the default "artifactId-version.jar", matching what
-                         resolveWorkerJar() in Main.kt expects. useTransitiveDependencies=false,
-                         with no further includes needed, is enough to limit this to exactly the
-                         two direct dependencies declared above (their own transitive libraries -
-                         kotlin-stdlib, jackson, JNA, OpenCV, ... - are already bundled inside
-                         those two fat jars, not wanted here again). -->
-                    <inlineDescriptors>
-                        <inlineDescriptor>
-                            <id>dist</id>
-                            <dependencySets>
-                                <dependencySet>
-                                    <useProjectArtifact>false</useProjectArtifact>
-                                    <useTransitiveDependencies>false</useTransitiveDependencies>
-                                    <unpack>false</unpack>
-                                    <outputFileNameMapping>&#36;{artifact.artifactId}.jar</outputFileNameMapping>
-                                </dependencySet>
-                            </dependencySets>
-                            <files>
-                                <file>
-                                    <source>${project.parent.basedir}/README.md</source>
-                                </file>
-                                <file>
-                                    <source>${project.parent.basedir}/CONTRIBUTING.md</source>
-                                </file>
-                                <file>
-                                    <source>${project.parent.basedir}/LICENSE</source>
-                                </file>
-                            </files>
-                        </inlineDescriptor>
-                    </inlineDescriptors>
-                </configuration>
+                <artifactId>maven-dependency-plugin</artifactId>
                 <executions>
-                    <!-- "make-assembly" (the jar-with-dependencies one server/worker opt into)
-                         stays off here - it defaults to disabled in the parent's
-                         pluginManagement, and this module never opts in. -->
-
-                    <!-- Exploded directory under target/mcp-screenshotter/, for e2e tests,
-                         local runs, or CI to point straight at with no unpacking step. Uses
-                         the plugin-level inlineDescriptor as-is. -->
+                    <!-- The two modules' own thin jars, flat, under their fixed runtime names
+                         (mapped via destFileName rather than the default
+                         "artifactId-version.jar") - not the version-suffixed name Maven itself
+                         builds them under, so code that locates them at runtime (Main.kt's
+                         resolveWorkerJar, the e2e test scripts) never has to know this project's
+                         version. -->
                     <execution>
-                        <id>make-dist-dir</id>
+                        <id>copy-own-jars</id>
                         <phase>package</phase>
                         <goals>
-                            <goal>single</goal>
+                            <goal>copy</goal>
                         </goals>
                         <configuration>
-                            <attach>false</attach>
-                            <inlineDescriptors>
-                                <inlineDescriptor combine.children="override">
-                                    <formats>
-                                        <format>dir</format>
-                                    </formats>
-                                    <includeBaseDirectory>false</includeBaseDirectory>
-                                </inlineDescriptor>
-                            </inlineDescriptors>
+                            <outputDirectory>${project.build.directory}/mcp-screenshotter</outputDirectory>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>cz.loplex.mcp</groupId>
+                                    <artifactId>mcp-screenshotter-server</artifactId>
+                                    <destFileName>mcp-screenshotter-server.jar</destFileName>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>cz.loplex.mcp</groupId>
+                                    <artifactId>mcp-screenshotter-worker</artifactId>
+                                    <destFileName>mcp-screenshotter-worker.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+
+                    <!-- Every runtime dependency of server or worker, except the two modules
+                         themselves (already handled above, under their fixed names, not this
+                         one's version-suffixed default) and OpenCV (handled by the two
+                         executions below instead - it needs its content filtered before it's fit
+                         to ship, which copy-dependencies has no way to do). Plain
+                         artifactId-version.jar naming (Maven's default here) matches exactly what
+                         maven-jar-plugin's addClasspath writes into server/worker's own
+                         Class-Path manifest entries, so this needs no further mapping. -->
+                    <execution>
+                        <id>copy-shared-libs</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/mcp-screenshotter/lib</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                            <excludeGroupIds>cz.loplex.mcp</excludeGroupIds>
+                            <excludeArtifactIds>opencv</excludeArtifactIds>
+                        </configuration>
+                    </execution>
+
+                    <!-- org.openpnp:opencv bundles a native library for every OS/arch it
+                         supports in one jar (Windows, macOS, and three Linux archs), but this
+                         app is Linux-only (see worker/pom.xml's JNA/AT-SPI2/X11 dependencies)
+                         and nu.pattern.OpenCV.loadLocally() only ever extracts the one native
+                         lib matching the running JVM's os.name/os.arch - the rest is 100% dead
+                         weight. Unpacked here (to a scratch directory, not lib/ itself - this is
+                         raw material for repack-opencv-native below, not a finished output) via
+                         an allowlist (includes) rather than a denylist of unwanted platforms:
+                         OpenCV's Java API classes always, its native library only for the Linux
+                         arch(es) currently enabled (opencv.include.* - see pom.xml's properties
+                         doc for the linux-x86_64/linux-aarch64 profiles that null one out for a
+                         single-arch release build). An allowlist fails closed - a future opencv
+                         release adding a new platform directory just isn't on the list and stays
+                         out automatically, where a denylist would let it silently back in.
+                         Unlike copy-dependencies' includes/excludes above (artifact coordinates),
+                         these includes are file paths *within* the one matched artifact - a
+                         comma-separated string, not a nested list, is this mojo's own syntax for
+                         that. -->
+                    <execution>
+                        <id>unpack-opencv-native</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>unpack-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/opencv-native</outputDirectory>
+                            <includeArtifactIds>opencv</includeArtifactIds>
+                            <includes>META-INF/**,nu/pattern/*.class,org/opencv/**,${opencv.include.linuxX86_64},${opencv.include.linuxAarch64}</includes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Re-zips unpack-opencv-native's filtered output into the actual lib/opencv-*.jar
+                 shipped in the bundle. Version in the finalName (not the fixed names copy-own-jars
+                 uses above) on purpose: this has to match the plain artifactId-version.jar name
+                 worker/pom.xml's own Class-Path manifest entry for OpenCV already expects (the
+                 same convention copy-dependencies uses), or `java -jar mcp-screenshotter-worker.jar`
+                 would look for a lib/opencv-*.jar that isn't there.
+                 addClasspath explicitly off (unlike pom.xml pluginManagement's default for this
+                 plugin) - this jar is a plain dependency for server/worker to load, not something
+                 anyone runs directly, and computing a Class-Path against *this* module's own
+                 dependencies (server+worker, not OpenCV's) would just be noise. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>repack-opencv-native</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classesDirectory>${project.build.directory}/opencv-native</classesDirectory>
+                            <outputDirectory>${project.build.directory}/mcp-screenshotter/lib</outputDirectory>
+                            <finalName>opencv-${opencv.version}</finalName>
+                            <archive>
+                                <addMavenDescriptor>false</addMavenDescriptor>
+                                <manifest>
+                                    <addClasspath>false</addClasspath>
+                                </manifest>
+                            </archive>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- README/CONTRIBUTING/LICENSE alongside the jars - the only thing left that isn't
+                 a dependency artifact, so it's plain file copying rather than anything
+                 dependency-resolution-aware. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>${maven-resources-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>copy-docs</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/mcp-screenshotter</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${maven.multiModuleProjectDirectory}</directory>
+                                    <includes>
+                                        <include>README.md</include>
+                                        <include>CONTRIBUTING.md</include>
+                                        <include>LICENSE</include>
+                                    </includes>
+                                </resource>
+                            </resources>
                         </configuration>
                     </execution>
                 </executions>

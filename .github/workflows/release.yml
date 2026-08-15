@@ -10,8 +10,11 @@ permissions:
 
 jobs:
   build:
-    name: Build release bundle
+    name: Build release bundle (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v5
 
@@ -35,18 +38,27 @@ jobs:
       # first, so `java -jar mcp-screenshotter-server.jar` works straight out of that directory
       # (or the tar.gz built from it below, once extracted), with no SCREENSHOTTER_WORKER_JAR
       # override.
+      #
+      # The linux-${{ matrix.arch }} profile (worker/pom.xml) trims org.openpnp:opencv's fat,
+      # every-platform jar down to just the one native library this build actually runs on - see
+      # the opencv.exclude.otherLinuxArch property doc there. Without it, the worker jar carries
+      # >100MB of Windows/macOS/other-arch native code nu.pattern.OpenCV.loadLocally() can never
+      # load on this JVM.
       - name: Build (skip tests, already covered by CI on main)
-        run: mvn -B clean package -DskipTests
+        run: mvn -B clean package -DskipTests -Plinux-${{ matrix.arch }}
 
-      # Maven's output is deliberately version-agnostic (packaging/pom.xml) - this step is the
-      # only place that knows the tag, so it builds the actual public archive from the exploded
-      # output: a wrapper directory (so extracting it doesn't dump files into wherever the user
-      # is) named after the tag, matching the convention users expect (e.g.
-      # tar -xzf mcp-screenshotter-v0.2.0.tar.gz -> a mcp-screenshotter-v0.2.0/ directory).
-      - name: Build release asset named after the tag
+      # Maven's output is deliberately version- and arch-agnostic (packaging/pom.xml) - this step
+      # is the only place that knows the tag and which arch this matrix leg just built, so it
+      # builds the actual public per-arch archive from the exploded output: a wrapper directory
+      # (so extracting it doesn't dump files into wherever the user is) named after the tag and
+      # arch, matching the convention users expect (e.g.
+      # tar -xzf mcp-screenshotter-v0.2.0-linux-x86_64.tar.gz -> a
+      # mcp-screenshotter-v0.2.0-linux-x86_64/ directory).
+      - name: Build release asset named after the tag and architecture
         run: |
-          cp -r packaging/target/mcp-screenshotter "packaging/target/mcp-screenshotter-${GITHUB_REF_NAME}"
-          tar -czf "mcp-screenshotter-${GITHUB_REF_NAME}.tar.gz" -C packaging/target "mcp-screenshotter-${GITHUB_REF_NAME}"
+          name="mcp-screenshotter-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
+          cp -r packaging/target/mcp-screenshotter "packaging/target/${name}"
+          tar -czf "${name}.tar.gz" -C packaging/target "${name}"
 
       # Uploaded as a plain workflow artifact (downloadable from this run's Actions page for
       # inspection), NOT published as a GitHub Release yet - that happens in the gated `publish`
@@ -54,8 +66,8 @@ jobs:
       - name: Upload bundle as workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: mcp-screenshotter-${{ github.ref_name }}
-          path: mcp-screenshotter-${{ github.ref_name }}.tar.gz
+          name: mcp-screenshotter-${{ github.ref_name }}-linux-${{ matrix.arch }}
+          path: mcp-screenshotter-${{ github.ref_name }}-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
   publish:
@@ -68,10 +80,13 @@ jobs:
     # Without it, this job runs immediately after `build`, same as before.
     environment: release
     steps:
-      - name: Download bundle artifact
+      # Both matrix legs' artifacts (one per arch) land in this one directory, flattened -
+      # merge-multiple avoids nesting each under its own artifact-name subdirectory.
+      - name: Download bundle artifacts
         uses: actions/download-artifact@v8
         with:
-          name: mcp-screenshotter-${{ github.ref_name }}
+          pattern: mcp-screenshotter-${{ github.ref_name }}-linux-*
+          merge-multiple: true
 
       - name: Create GitHub Release
         env:
@@ -80,4 +95,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
-            "mcp-screenshotter-${GITHUB_REF_NAME}.tar.gz"
+            mcp-screenshotter-"${GITHUB_REF_NAME}"-linux-*.tar.gz

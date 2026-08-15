@@ -23,7 +23,7 @@
             <groupId>tools.jackson.module</groupId>
             <artifactId>jackson-module-kotlin</artifactId>
         </dependency>
-        
+
         <!-- JNA for AT-SPI2 and X11 Native Integration -->
         <dependency>
             <groupId>net.java.dev.jna</groupId>
@@ -33,13 +33,15 @@
             <groupId>net.java.dev.jna</groupId>
             <artifactId>jna-platform</artifactId>
         </dependency>
-        
-        <!-- OpenCV for fallback UI detection -->
+
+        <!-- OpenCV for fallback UI detection. Ships as its own trimmed lib/opencv-*.jar rather
+             than bundled into this module's own jar - see packaging/pom.xml and the
+             opencv.include.* properties (pom.xml) for why and how. -->
         <dependency>
             <groupId>org.openpnp</groupId>
             <artifactId>opencv</artifactId>
         </dependency>
-        
+
         <!-- JUnit for Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -61,9 +63,13 @@
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
             </plugin>
+            <!-- Just this module's mainClass - addClasspath/classpathPrefix (needed so the
+                 plain thin jar maven-jar-plugin builds by default can still find its
+                 dependencies at runtime) are common to server and worker alike, see pom.xml
+                 pluginManagement. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-assembly-plugin</artifactId>
+                <artifactId>maven-jar-plugin</artifactId>
                 <configuration>
                     <archive>
                         <manifest>
@@ -71,14 +77,6 @@
                         </manifest>
                     </archive>
                 </configuration>
-                <!-- Opt in to the parent's "make-assembly" execution (disabled by default,
-                     see pom.xml pluginManagement) - this module wants the fat jar. -->
-                <executions>
-                    <execution>
-                        <id>make-assembly</id>
-                        <phase>package</phase>
-                    </execution>
-                </executions>
             </plugin>
         </plugins>
     </build>
