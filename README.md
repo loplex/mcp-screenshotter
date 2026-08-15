@@ -104,7 +104,7 @@ environment variable, read once when the orchestrator starts:
   mirror](#vnc-mirror-optional) below if you still want to see or interact with it.
 
 ```bash
-SCREENSHOTTER_DISPLAY_BACKEND=xvfb java -jar server/target/mcp-screenshotter-server.jar
+SCREENSHOTTER_DISPLAY_BACKEND=xvfb java -jar packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar
 ```
 
 Or, in `claude_desktop_config.json`, add it under the server's `"env"` key (see
@@ -114,7 +114,7 @@ The sandbox's screen resolution is `1024x768` by default; override it with
 `SCREENSHOTTER_DISPLAY_RESOLUTION` (format `WIDTHxHEIGHT`):
 
 ```bash
-SCREENSHOTTER_DISPLAY_RESOLUTION=1280x800 java -jar server/target/mcp-screenshotter-server.jar
+SCREENSHOTTER_DISPLAY_RESOLUTION=1280x800 java -jar packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar
 ```
 
 ## VNC Mirror (optional)
@@ -124,7 +124,7 @@ useful with the `xvfb` backend, which otherwise has no window anywhere for a hum
 Unset (the default), no VNC mirror is started at all.
 
 ```bash
-SCREENSHOTTER_DISPLAY_BACKEND=xvfb SCREENSHOTTER_VNC_PORT=5900 java -jar server/target/mcp-screenshotter-server.jar
+SCREENSHOTTER_DISPLAY_BACKEND=xvfb SCREENSHOTTER_VNC_PORT=5900 java -jar packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar
 ```
 
 Connect any VNC viewer to `127.0.0.1:5900` while the server is running. It's started with
@@ -142,7 +142,7 @@ wrapped in `ulimit -v` (default `8192` MB of virtual address space; override via
 the kernel level.
 
 ```bash
-SCREENSHOTTER_WORKER_MAX_HEAP=1g SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB=4096 java -jar server/target/mcp-screenshotter-server.jar
+SCREENSHOTTER_WORKER_MAX_HEAP=1g SCREENSHOTTER_WORKER_MAX_VIRTUAL_MEM_MB=4096 java -jar packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar
 ```
 
 For debugging `close_app`/shutdown targeting without any risk of an actual kill signal going
@@ -158,26 +158,28 @@ e.g. per-call `close_app`/`kill(2)` results, or AT-SPI desktop-tree enumeration 
 always printed regardless of this flag.
 
 ```bash
-SCREENSHOTTER_DEBUG=1 java -jar server/target/mcp-screenshotter-server.jar
+SCREENSHOTTER_DEBUG=1 java -jar packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar
 ```
 
 ## Build and Run
 
 **Prebuilt releases:** each tagged version publishes a `mcp-screenshotter-vX.Y.Z.tar.gz` bundle on
 the [Releases page](https://github.com/loplex/mcp-screenshotter/releases), containing both jars
-already laid out under `server/target/` and `worker/target/`. Extract it and run
-`java -jar server/target/mcp-screenshotter-server.jar` directly - no Maven build needed. You still
-need a **Java 17+** runtime and the [sandbox runtime dependencies](#requirements) installed.
+side by side in the bundle root. Extract it and run
+`java -jar mcp-screenshotter-server.jar` directly - no Maven build needed. You still need a
+**Java 17+** runtime and the [sandbox runtime dependencies](#requirements) installed.
 
 1. **Compile and Package:**
    ```bash
    mvn clean package -DskipTests
    ```
-   This produces `server/target/mcp-screenshotter-server.jar` and `worker/target/mcp-screenshotter-worker.jar`.
+   This produces `packaging/target/mcp-screenshotter/`, a flat directory with both
+   `mcp-screenshotter-server.jar` and `mcp-screenshotter-worker.jar` side by side (see
+   `packaging/pom.xml`) - the same layout the prebuilt release bundle has, just unarchived.
    Both filenames are fixed (no version, no build-tool-specific suffix) so the orchestrator can
    find the worker jar - and this doc, the code you're about to run, doesn't need updating on
-   every version bump. The orchestrator locates the worker jar next to its own module (`worker/`
-   sitting alongside `server/`); if you've moved it somewhere else, point at it explicitly via
+   every version bump. The orchestrator locates the worker jar next to its own jar; if you've
+   moved it somewhere else, point at it explicitly via
    `SCREENSHOTTER_WORKER_JAR=/path/to/mcp-screenshotter-worker.jar`.
 
 2. **Run E2E Tests:**
@@ -211,7 +213,7 @@ Add the following configuration to your `claude_desktop_config.json`:
       "command": "java",
       "args": [
         "-jar",
-        "/absolute/path/to/mcp-screenshotter/server/target/mcp-screenshotter-server.jar"
+        "/absolute/path/to/mcp-screenshotter/packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar"
       ],
       "env": {
         "SCREENSHOTTER_DISPLAY_BACKEND": "xephyr",

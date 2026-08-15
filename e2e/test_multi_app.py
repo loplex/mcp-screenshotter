@@ -52,7 +52,7 @@ def wait_for_windows(proc, req_id, predicate, description, timeout=15.0, interva
 def test_multi_app_scenario():
     print("=== Starting Multi-App Session Management E2E Test ===")
 
-    jar_path = "server/target/mcp-screenshotter-server.jar"
+    jar_path = "packaging/target/mcp-screenshotter/mcp-screenshotter-server.jar"
     if not os.path.exists(jar_path):
         print(f"ERROR: {jar_path} not found. Run 'mvn package' first.")
         return

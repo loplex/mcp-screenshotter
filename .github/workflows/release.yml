@@ -27,26 +27,20 @@ jobs:
           mvn -B org.codehaus.mojo:versions-maven-plugin:set \
             -DnewVersion="${version}" -DgenerateBackupPoms=false
 
+      # The packaging module's assembly (see packaging/pom.xml) already produces the flat-layout
+      # release bundle as part of the ordinary Maven build: both jars side by side under their
+      # fixed runtime names, plus README/CONTRIBUTING/LICENSE, archived with a wrapper directory
+      # at packaging/target/mcp-screenshotter.tar.gz. SandboxManager's worker-jar lookup (Main.kt,
+      # resolveWorkerJar) checks for "mcp-screenshotter-worker.jar" next to its own jar first, so
+      # `java -jar mcp-screenshotter-server.jar` works straight out of the extracted archive, with
+      # no SCREENSHOTTER_WORKER_JAR override.
       - name: Build (skip tests, already covered by CI on main)
         run: mvn -B clean package -DskipTests
 
-      - name: Assemble distribution bundle
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          bundle="mcp-screenshotter-${tag}"
-
-          # Mirror the server/target + worker/target layout the Maven build produces:
-          # SandboxManager's default worker-jar lookup (Main.kt) resolves
-          # "worker/target/mcp-screenshotter-worker.jar" relative to the server jar's own
-          # location, so `java -jar server/target/mcp-screenshotter-server.jar` must keep working
-          # straight out of the extracted archive, with no SCREENSHOTTER_WORKER_JAR override.
-          mkdir -p "dist/${bundle}/server/target" "dist/${bundle}/worker/target"
-          cp server/target/mcp-screenshotter-server.jar "dist/${bundle}/server/target/"
-          cp worker/target/mcp-screenshotter-worker.jar "dist/${bundle}/worker/target/"
-          cp README.md CONTRIBUTING.md LICENSE "dist/${bundle}/"
-
-          tar -czf "${bundle}.tar.gz" -C dist "${bundle}"
+      # Maven's output is deliberately version-agnostic (packaging/pom.xml) - this just gives it
+      # the public, tag-versioned asset name for upload. No other assembly happens here.
+      - name: Name release asset after the tag
+        run: cp packaging/target/mcp-screenshotter.tar.gz "mcp-screenshotter-${GITHUB_REF_NAME}.tar.gz"
 
       # Uploaded as a plain workflow artifact (downloadable from this run's Actions page for
       # inspection), NOT published as a GitHub Release yet - that happens in the gated `publish`

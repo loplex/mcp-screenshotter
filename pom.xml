@@ -13,7 +13,7 @@
         <maven.compiler.target>17</maven.compiler.target>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
 
-        <maven-assembly-plugin.version>3.6.0</maven-assembly-plugin.version>
+        <maven-assembly-plugin.version>3.8.0</maven-assembly-plugin.version>
 
         <kotlin.version>2.4.10</kotlin.version>
         <jackson.version>3.2.0</jackson.version>
@@ -25,6 +25,7 @@
     <modules>
         <module>server</module>
         <module>worker</module>
+        <module>packaging</module>
     </modules>
 
     <dependencyManagement>
@@ -100,26 +101,39 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-assembly-plugin</artifactId>
                     <version>${maven-assembly-plugin.version}</version>
-                    <configuration>
-                        <descriptorRefs>
-                            <descriptorRef>jar-with-dependencies</descriptorRef>
-                        </descriptorRefs>
-                        <!-- Drop the version and "-jar-with-dependencies" classifier from the
-                             output filename (e.g. "mcp-screenshotter-worker.jar" instead of
-                             "mcp-screenshotter-worker-0.2.0-SNAPSHOT-jar-with-dependencies.jar"), so
-                             code that locates these jars at runtime (Main.kt's SandboxManager,
-                             the e2e test scripts) never has to know this project's version or
-                             this plugin's naming convention. -->
-                        <finalName>${project.artifactId}</finalName>
-                        <appendAssemblyId>false</appendAssemblyId>
-                    </configuration>
                     <executions>
                         <execution>
                             <id>make-assembly</id>
-                            <phase>package</phase>
+                            <!-- Opt-in, not automatic: "none" here so any module that merely
+                                 references this plugin (e.g. the packaging aggregator, which
+                                 has its own unrelated "make-dist" execution) doesn't
+                                 accidentally inherit this fat-jar assembly too. server/worker
+                                 - the only modules that actually want it - override this back
+                                 to "package" in their own pom.xml.
+                                 Configuration lives here, at the execution level, rather than
+                                 the plugin level, precisely so it stays scoped to this one
+                                 execution and can't leak into a sibling execution some other
+                                 module declares on the same plugin (that's what caused a
+                                 spurious jar-with-dependencies output from the packaging
+                                 module during development of this setup). -->
+                            <phase>none</phase>
                             <goals>
                                 <goal>single</goal>
                             </goals>
+                            <configuration>
+                                <descriptorRefs>
+                                    <descriptorRef>jar-with-dependencies</descriptorRef>
+                                </descriptorRefs>
+                                <!-- Drop the version and "-jar-with-dependencies" classifier from
+                                     the output filename (e.g. "mcp-screenshotter-worker.jar"
+                                     instead of
+                                     "mcp-screenshotter-worker-0.2.0-SNAPSHOT-jar-with-dependencies.jar"),
+                                     so code that locates these jars at runtime (Main.kt's
+                                     SandboxManager, the e2e test scripts) never has to know this
+                                     project's version or this plugin's naming convention. -->
+                                <finalName>${project.artifactId}</finalName>
+                                <appendAssemblyId>false</appendAssemblyId>
+                            </configuration>
                         </execution>
                     </executions>
                 </plugin>

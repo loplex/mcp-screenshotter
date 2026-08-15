@@ -10,7 +10,9 @@ Install the system requirements listed in the [README](README.md#requirements), 
 mvn clean package -DskipTests
 ```
 
-This builds `server/target/mcp-screenshotter-server.jar` and `worker/target/mcp-screenshotter-worker.jar`.
+This builds `server/target/mcp-screenshotter-server.jar` and `worker/target/mcp-screenshotter-worker.jar`
+separately, and also assembles `packaging/target/mcp-screenshotter/` - a flat directory with both jars
+side by side, which is what the e2e tests and `SandboxManager`'s worker-jar lookup expect.
 
 ## Running the tests
 

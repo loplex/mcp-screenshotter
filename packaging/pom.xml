@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cz.loplex.mcp</groupId>
+        <artifactId>mcp-screenshotter-parent</artifactId>
+        <version>0.2.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>mcp-screenshotter-packaging</artifactId>
+    <packaging>pom</packaging>
+
+    <!-- No code of its own - these dependencies exist purely so Maven's reactor (a) builds
+         server and worker before this module regardless of <modules> declaration order, and
+         (b) resolves them straight from the reactor build, not the local/remote repo, so the
+         assembly below can pull in the actual just-built fat jars. -->
+    <dependencies>
+        <dependency>
+            <groupId>cz.loplex.mcp</groupId>
+            <artifactId>mcp-screenshotter-server</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>cz.loplex.mcp</groupId>
+            <artifactId>mcp-screenshotter-worker</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <configuration>
+                    <appendAssemblyId>false</appendAssemblyId>
+                    <!-- Fixed, version-free name on purpose: this is a build-tool-internal
+                         output (e2e tests, local runs, CI reading it straight off disk), not
+                         the versioned public download - so nothing downstream needs to know
+                         this project's version or a git tag to find it. The eventual GitHub
+                         Release asset (both its filename and the wrapper directory inside it)
+                         is built by the CI release step directly from this exploded output. -->
+                    <finalName>mcp-screenshotter</finalName>
+                    <!-- Both jars, flat, side by side - no server/target or worker/target
+                         nesting. Mapped to their fixed runtime names (${artifact.artifactId}.jar)
+                         rather than the default "artifactId-version.jar", matching what
+                         resolveWorkerJar() in Main.kt expects. useTransitiveDependencies=false,
+                         with no further includes needed, is enough to limit this to exactly the
+                         two direct dependencies declared above (their own transitive libraries -
+                         kotlin-stdlib, jackson, JNA, OpenCV, ... - are already bundled inside
+                         those two fat jars, not wanted here again). -->
+                    <inlineDescriptors>
+                        <inlineDescriptor>
+                            <id>dist</id>
+                            <dependencySets>
+                                <dependencySet>
+                                    <useProjectArtifact>false</useProjectArtifact>
+                                    <useTransitiveDependencies>false</useTransitiveDependencies>
+                                    <unpack>false</unpack>
+                                    <outputFileNameMapping>&#36;{artifact.artifactId}.jar</outputFileNameMapping>
+                                </dependencySet>
+                            </dependencySets>
+                            <files>
+                                <file>
+                                    <source>${project.parent.basedir}/README.md</source>
+                                </file>
+                                <file>
+                                    <source>${project.parent.basedir}/CONTRIBUTING.md</source>
+                                </file>
+                                <file>
+                                    <source>${project.parent.basedir}/LICENSE</source>
+                                </file>
+                            </files>
+                        </inlineDescriptor>
+                    </inlineDescriptors>
+                </configuration>
+                <executions>
+                    <!-- "make-assembly" (the jar-with-dependencies one server/worker opt into)
+                         stays off here - it defaults to disabled in the parent's
+                         pluginManagement, and this module never opts in. -->
+
+                    <!-- Exploded directory under target/mcp-screenshotter/, for e2e tests,
+                         local runs, or CI to point straight at with no unpacking step. Uses
+                         the plugin-level inlineDescriptor as-is. -->
+                    <execution>
+                        <id>make-dist-dir</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <attach>false</attach>
+                            <inlineDescriptors>
+                                <inlineDescriptor combine.children="override">
+                                    <formats>
+                                        <format>dir</format>
+                                    </formats>
+                                    <includeBaseDirectory>false</includeBaseDirectory>
+                                </inlineDescriptor>
+                            </inlineDescriptors>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

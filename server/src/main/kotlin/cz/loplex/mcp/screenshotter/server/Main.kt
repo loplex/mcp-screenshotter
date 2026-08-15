@@ -301,10 +301,17 @@ class SandboxManager {
     /**
      * Locates the worker jar to launch:
      *  1. `SCREENSHOTTER_WORKER_JAR` env var, if set - an explicit override for deployments where
-     *     the module layout below doesn't apply.
-     *  2. Otherwise, `worker/target/mcp-screenshotter-worker.jar`, resolved next to wherever *this
-     *     server's own* jar/class files actually live on disk - not the process's current working
-     *     directory, which an MCP host (e.g. Claude Desktop) is free to launch us from anywhere.
+     *     the layout below doesn't apply.
+     *  2. Otherwise, `mcp-screenshotter-worker.jar` sitting right next to this server's own jar -
+     *     resolved via `codeSource.location`, not the process's current working directory, which
+     *     an MCP host (e.g. Claude Desktop) is free to launch us from anywhere. This is a single,
+     *     flat layout used everywhere: the release bundle has both jars side by side in the
+     *     extracted directory, and so does packaging/target/mcp-screenshotter/ - the packaging
+     *     module's own `mvn clean package` output (see packaging/pom.xml) - so the same lookup
+     *     covers both cases with no separate "dev tree" path to fall back to. (Running the server
+     *     jar straight out of server/target/ on its own, with no packaging module involved - e.g.
+     *     an IDE run - won't find a sibling worker jar there; point SCREENSHOTTER_WORKER_JAR at
+     *     one explicitly for that.)
      *     The filename itself is fixed (no version, no assembly-plugin "-jar-with-dependencies"
      *     classifier) via `finalName`/`appendAssemblyId` on the assembly plugin in the parent
      *     `pom.xml`, so this never has to know this project's version or Maven's naming
@@ -316,13 +323,12 @@ class SandboxManager {
         System.getenv("SCREENSHOTTER_WORKER_JAR")?.trim()?.takeUnless { it.isEmpty() }?.let { return it }
 
         // codeSource.location is either this server's own jar file (a packaged run) or its
-        // target/classes directory (run straight from Maven/an IDE) - either way it's a direct
-        // child of server/target/, so three parents up lands on the project root regardless.
+        // target/classes directory (run straight from Maven/an IDE) - either way, the worker jar
+        // is expected right beside it.
         val serverLocation = Paths.get(
             SandboxManager::class.java.protectionDomain.codeSource.location.toURI()
         )
-        val projectRoot = serverLocation.parent.parent.parent
-        val workerJar = projectRoot.resolve("worker").resolve("target").resolve("mcp-screenshotter-worker.jar")
+        val workerJar = serverLocation.resolveSibling("mcp-screenshotter-worker.jar")
 
         if (!Files.isRegularFile(workerJar)) {
             throw RuntimeException(
