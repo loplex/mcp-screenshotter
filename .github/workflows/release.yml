@@ -34,16 +34,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          bundle="screenshotter-mcp-${tag}"
+          bundle="mcp-screenshotter-${tag}"
 
           # Mirror the server/target + worker/target layout the Maven build produces:
           # SandboxManager's default worker-jar lookup (Main.kt) resolves
-          # "worker/target/screenshotter-worker.jar" relative to the server jar's own
-          # location, so `java -jar server/target/screenshotter-server.jar` must keep working
+          # "worker/target/mcp-screenshotter-worker.jar" relative to the server jar's own
+          # location, so `java -jar server/target/mcp-screenshotter-server.jar` must keep working
           # straight out of the extracted archive, with no SCREENSHOTTER_WORKER_JAR override.
           mkdir -p "dist/${bundle}/server/target" "dist/${bundle}/worker/target"
-          cp server/target/screenshotter-server.jar "dist/${bundle}/server/target/"
-          cp worker/target/screenshotter-worker.jar "dist/${bundle}/worker/target/"
+          cp server/target/mcp-screenshotter-server.jar "dist/${bundle}/server/target/"
+          cp worker/target/mcp-screenshotter-worker.jar "dist/${bundle}/worker/target/"
           cp README.md CONTRIBUTING.md LICENSE "dist/${bundle}/"
 
           tar -czf "${bundle}.tar.gz" -C dist "${bundle}"
@@ -54,8 +54,8 @@ jobs:
       - name: Upload bundle as workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: screenshotter-mcp-${{ github.ref_name }}
-          path: screenshotter-mcp-${{ github.ref_name }}.tar.gz
+          name: mcp-screenshotter-${{ github.ref_name }}
+          path: mcp-screenshotter-${{ github.ref_name }}.tar.gz
           if-no-files-found: error
 
   publish:
@@ -71,7 +71,7 @@ jobs:
       - name: Download bundle artifact
         uses: actions/download-artifact@v8
         with:
-          name: screenshotter-mcp-${{ github.ref_name }}
+          name: mcp-screenshotter-${{ github.ref_name }}
 
       - name: Create GitHub Release
         env:
@@ -80,4 +80,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
-            "screenshotter-mcp-${GITHUB_REF_NAME}.tar.gz"
+            "mcp-screenshotter-${GITHUB_REF_NAME}.tar.gz"

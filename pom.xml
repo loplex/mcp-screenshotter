@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>cz.loplex.mcp</groupId>
-    <artifactId>screenshotter-mcp-parent</artifactId>
+    <artifactId>mcp-screenshotter-parent</artifactId>
     <version>0.2.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
@@ -105,8 +105,8 @@
                             <descriptorRef>jar-with-dependencies</descriptorRef>
                         </descriptorRefs>
                         <!-- Drop the version and "-jar-with-dependencies" classifier from the
-                             output filename (e.g. "screenshotter-worker.jar" instead of
-                             "screenshotter-worker-0.2.0-SNAPSHOT-jar-with-dependencies.jar"), so
+                             output filename (e.g. "mcp-screenshotter-worker.jar" instead of
+                             "mcp-screenshotter-worker-0.2.0-SNAPSHOT-jar-with-dependencies.jar"), so
                              code that locates these jars at runtime (Main.kt's SandboxManager,
                              the e2e test scripts) never has to know this project's version or
                              this plugin's naming convention. -->

@@ -125,7 +125,7 @@ def test_gui_scenario():
     if not os.path.exists("e2e/sample_app.py"):
         raise Exception("e2e/sample_app.py not found!")
 
-    jar_path = "server/target/screenshotter-server.jar"
+    jar_path = "server/target/mcp-screenshotter-server.jar"
     if not os.path.exists(jar_path):
         print(f"ERROR: {jar_path} not found. Run 'mvn package' first.")
         return

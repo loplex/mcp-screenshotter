@@ -302,7 +302,7 @@ class SandboxManager {
      * Locates the worker jar to launch:
      *  1. `SCREENSHOTTER_WORKER_JAR` env var, if set - an explicit override for deployments where
      *     the module layout below doesn't apply.
-     *  2. Otherwise, `worker/target/screenshotter-worker.jar`, resolved next to wherever *this
+     *  2. Otherwise, `worker/target/mcp-screenshotter-worker.jar`, resolved next to wherever *this
      *     server's own* jar/class files actually live on disk - not the process's current working
      *     directory, which an MCP host (e.g. Claude Desktop) is free to launch us from anywhere.
      *     The filename itself is fixed (no version, no assembly-plugin "-jar-with-dependencies"
@@ -322,7 +322,7 @@ class SandboxManager {
             SandboxManager::class.java.protectionDomain.codeSource.location.toURI()
         )
         val projectRoot = serverLocation.parent.parent.parent
-        val workerJar = projectRoot.resolve("worker").resolve("target").resolve("screenshotter-worker.jar")
+        val workerJar = projectRoot.resolve("worker").resolve("target").resolve("mcp-screenshotter-worker.jar")
 
         if (!Files.isRegularFile(workerJar)) {
             throw RuntimeException(
@@ -696,7 +696,7 @@ internal fun handleMethod(method: String, params: Map<String, Any>?): Any? {
             InitResult(
                 protocolVersion = "2024-11-05",
                 capabilities = mapOf("tools" to emptyMap<String, Any>()),
-                serverInfo = mapOf("name" to "screenshotter-mcp-server", "version" to "0.2.0")
+                serverInfo = mapOf("name" to "mcp-screenshotter", "version" to "0.2.0")
             )
         }
         "initialized" -> emptyMap<String, Any>()

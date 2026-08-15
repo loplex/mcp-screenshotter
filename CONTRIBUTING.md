@@ -10,7 +10,7 @@ Install the system requirements listed in the [README](README.md#requirements), 
 mvn clean package -DskipTests
 ```
 
-This builds `server/target/screenshotter-server.jar` and `worker/target/screenshotter-worker.jar`.
+This builds `server/target/mcp-screenshotter-server.jar` and `worker/target/mcp-screenshotter-worker.jar`.
 
 ## Running the tests
 
