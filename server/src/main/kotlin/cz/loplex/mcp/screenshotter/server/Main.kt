@@ -176,7 +176,7 @@ class SandboxManager {
             pb.environment().clear()
             pb.environment().putAll(sandboxEnv!!)
         }
-        Thread.sleep(1000)
+        waitForAtSpiBusReady(sandboxEnv!!)
 
         // 4. Start Worker
         // Capped heap (default 512m, override via SCREENSHOTTER_WORKER_MAX_HEAP) so a runaway
@@ -233,6 +233,37 @@ class SandboxManager {
 
         // Ensure cleanup on graceful shutdown (Ctrl-C, normal exit, ...)
         Runtime.getRuntime().addShutdownHook(Thread { stop() })
+    }
+
+    /**
+     * Polls for `at-spi-bus-launcher` to actually be ready, instead of just guessing. Unlike the
+     * display server (self-synchronized via `-displayfd`) and dbus-daemon (self-synchronized by
+     * reading its printed address), `at-spi-bus-launcher` gives no readiness signal of its own -
+     * this used to be a blind fixed `Thread.sleep(1000)` here, which raced with slower/busier CI
+     * runners: an app launched right after could silently fail to register its accessible tree
+     * with AT-SPI2 at all, with no way to recover afterwards no matter how long the caller then
+     * waited. Asking the session bus directly for `org.a11y.Bus.GetAddress` - the same call any
+     * AT-SPI2 client (like the ATK bridge apps load) makes to find the accessibility bus - is a
+     * real readiness signal: it only succeeds once the launcher has actually registered it.
+     */
+    private fun waitForAtSpiBusReady(env: Map<String, String>, timeoutMs: Long = 10_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val pb = ProcessBuilder(
+                "dbus-send", "--session", "--print-reply",
+                "--dest=org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus.GetAddress"
+            )
+            pb.environment().clear()
+            pb.environment().putAll(env)
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+            if (pb.start().waitFor() == 0) return
+            Thread.sleep(100)
+        }
+        throw RuntimeException(
+            "AT-SPI2 bus did not become ready within ${timeoutMs}ms " +
+                "(org.a11y.Bus.GetAddress never succeeded on the session bus)."
+        )
     }
 
     /**
