@@ -25,7 +25,15 @@
              rather than a hardcoded date, so it moves forward on its own as the repo changes
              instead of needing a manual bump; it still stays fixed for any given commit, which is
              all reproducibility across the two matrix legs actually requires - both legs build the
-             same tag. -->
+             same tag.
+
+             Archive timestamps aren't the only way the two matrix legs can end up byte-different,
+             though: worker.jar's own MANIFEST.MF used to embed the arch-specific trimmed OpenCV
+             jar's filename (opencv.arch.suffix) directly into its Class-Path entry, which made that
+             entry - and so worker.jar itself - differ between legs even with this timestamp pinned.
+             See worker/pom.xml's Class-Path comment for the fix (listing both arch variants
+             literally, relying on the JVM silently skipping whichever one a given bundle doesn't
+             actually ship). -->
         <project.build.outputTimestamp>&#36;{git.commit.time}</project.build.outputTimestamp>
 
         <git-commit-id-maven-plugin.version>10.0.0</git-commit-id-maven-plugin.version>
@@ -39,26 +47,8 @@
         <opencv.version>4.7.0-0</opencv.version>
         <junit.version>5.10.2</junit.version>
 
-        <!-- org.openpnp:opencv bundles a native library for every OS/arch it supports in one
-             jar (Windows, macOS, and three Linux archs), but this app is Linux-only (see
-             worker/pom.xml's JNA/AT-SPI2/X11 dependencies) and nu.pattern.OpenCV.loadLocally()
-             only ever extracts the one native lib matching the running JVM's os.name/os.arch -
-             the rest is 100% dead weight. packaging/pom.xml unpacks OpenCV through an allowlist
-             (only these two properties, plus its Java API classes) rather than a denylist of
-             unwanted platforms, on purpose: an allowlist fails closed - a future opencv release
-             adding a new platform directory (say, linux/riscv64) is simply not on the list and
-             stays out automatically, where a denylist would let it silently back in. These two
-             properties are that allowlist's only variable part - which Linux arch(es) actually
-             end up in the shipped lib/opencv-*.jar - real paths by default (a plain local
-             `mvn package`, e2e tests, gets both archs and works on either machine); the
-             linux-x86_64/linux-aarch64 profiles below null one of the two out (to
-             "SKIP_NOTHING", which matches no real path in the jar) so a release build ships a
-             single-arch opencv jar instead of a dual-arch one. Declared at the root, not in
-             worker/pom.xml (which owns the actual dependency), because packaging/pom.xml - a
-             sibling module, not worker's descendant - is what references them, and Maven
-             properties aren't visible across sibling modules, only down a parent chain. -->
-        <opencv.include.linuxX86_64>nu/pattern/opencv/linux/x86_64/**</opencv.include.linuxX86_64>
-        <opencv.include.linuxAarch64>nu/pattern/opencv/linux/ARMv8/**</opencv.include.linuxAarch64>
+        <opencv.native.include>nu/pattern/opencv/linux/**</opencv.native.include>
+        <opencv.arch.suffix>multiarch</opencv.arch.suffix>
     </properties>
 
     <modules>
@@ -71,13 +61,15 @@
         <profile>
             <id>linux-x86_64</id>
             <properties>
-                <opencv.include.linuxAarch64>nu/pattern/opencv/SKIP_NOTHING/**</opencv.include.linuxAarch64>
+                <opencv.native.include>nu/pattern/opencv/linux/x86_64/**</opencv.native.include>
+                <opencv.arch.suffix>x86_64</opencv.arch.suffix>
             </properties>
         </profile>
         <profile>
             <id>linux-aarch64</id>
             <properties>
-                <opencv.include.linuxX86_64>nu/pattern/opencv/SKIP_NOTHING/**</opencv.include.linuxX86_64>
+                <opencv.native.include>nu/pattern/opencv/linux/ARMv8/**</opencv.native.include>
+                <opencv.arch.suffix>arm64</opencv.arch.suffix>
             </properties>
         </profile>
     </profiles>
@@ -155,25 +147,24 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-jar-plugin</artifactId>
                     <version>${maven-jar-plugin.version}</version>
-                    <configuration>
-                        <!-- server and worker both ship as thin jars now - their own compiled
-                             classes only, no bundled dependencies - next to a shared lib/
-                             directory of plain (unmodified) dependency jars, assembled by
-                             packaging/pom.xml. addClasspath/classpathPrefix here is what makes
-                             `java -jar mcp-screenshotter-server.jar` still find them: it writes
-                             a Class-Path entry (e.g. "lib/kotlin-stdlib-2.4.10.jar") into
-                             META-INF/MANIFEST.MF for every one of the module's own runtime
-                             dependencies, resolved relative to the jar's own location - not the
-                             process's working directory - so it keeps working no matter where
-                             `java -jar` is invoked from. Each module still supplies its own
-                             mainClass (see server/pom.xml, worker/pom.xml). -->
-                        <archive>
-                            <manifest>
-                                <addClasspath>true</addClasspath>
-                                <classpathPrefix>lib/</classpathPrefix>
-                            </manifest>
-                        </archive>
-                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>default-jar</id>
+                            <configuration>
+                                <archive>
+                                    <manifest>
+                                        <addClasspath>true</addClasspath>
+                                        <classpathPrefix>lib/</classpathPrefix>
+                                    </manifest>
+                                </archive>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-resources-plugin</artifactId>
+                    <version>${maven-resources-plugin.version}</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

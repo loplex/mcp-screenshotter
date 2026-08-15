@@ -40,6 +40,7 @@
         <dependency>
             <groupId>org.openpnp</groupId>
             <artifactId>opencv</artifactId>
+            <scope>provided</scope>
         </dependency>
 
         <!-- JUnit for Testing -->
@@ -75,6 +76,22 @@
                         <manifest>
                             <mainClass>cz.loplex.mcp.screenshotter.worker.WorkerMainKt</mainClass>
                         </manifest>
+                        <manifestEntries>
+                            <!-- Lists EVERY arch variant regardless of which profile (or no profile at all)
+                                 built this jar, so worker.jar's own MANIFEST.MF is byte-identical between the
+                                 release matrix's x86_64 and aarch64 legs. Each build ships only ONE of these
+                                 files (packaging/pom.xml trims org.openpnp:opencv down to just the running
+                                 arch's native lib) - the JVM classloader silently skips a Class-Path entry that
+                                 doesn't resolve to an existing file (verified: no warning, no error), so the
+                                 absent entries here are just inert no-op references, not a bug.
+                                 "linux-multiarch" (opencv.arch.suffix's default, pom.xml) is what a plain
+                                 `mvn package` with no -Plinux-* profile produces - the command CI (ci.yml) and
+                                 README's local build instructions both use - so it has to be listed here too,
+                                 not just the two release-matrix profiles' arch-specific names; omitting it is
+                                 exactly what caused nu.pattern.OpenCV to go unresolved (NoClassDefFoundError)
+                                 on any unprofiled build. -->
+                            <Class-Path>lib/opencv-${opencv.version}-linux-x86_64.jar lib/opencv-${opencv.version}-linux-arm64.jar lib/opencv-${opencv.version}-linux-multiarch.jar</Class-Path>
+                        </manifestEntries>
                     </archive>
                 </configuration>
             </plugin>
